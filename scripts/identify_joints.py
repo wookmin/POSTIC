@@ -5,25 +5,31 @@
 실제로 움직이려면 --go 를 반드시 붙여야 한다.
 
 사용법:
-    source /opt/ros/humble/setup.bash
-    python3 scripts/identify_joints.py --id 1            # 계획만 출력
-    python3 scripts/identify_joints.py --id 1 --go       # 실제로 흔든다
+    ~/dynamixel-venv/bin/python scripts/identify_joints.py --id 1            # 계획만 출력
+    ~/dynamixel-venv/bin/python scripts/identify_joints.py --id 1 --go       # 실제로 흔든다
 """
 
 import argparse
 import sys
+from pathlib import Path
 import time
+
+VENV_HINT = "~/dynamixel-venv/bin/python"
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 try:
     from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS
-except ImportError:
-    sys.exit(
-        "dynamixel_sdk 를 찾을 수 없습니다.\n"
-        "  source /opt/ros/humble/setup.bash  후 다시 실행하세요."
-    )
+    from src.robot.dynamixel_driver import load_robot_config
+except ImportError as exc:
+    sys.exit(f"{exc}\n"
+             f"  {VENV_HINT} 으로 실행하세요.\n"
+             "  패키지가 없으면: pip install -r requirements.txt")
 
-DEFAULT_PORT = "/dev/ttyUSB0"
-DEFAULT_BAUD = 1000000
+_BUS = load_robot_config()["bus"]
+
+DEFAULT_PORT = _BUS["port"]
+DEFAULT_BAUD = _BUS["baudrate"]
 
 ADDR_MIN_POSITION = 52
 ADDR_MAX_POSITION = 48
@@ -114,8 +120,13 @@ def main():
     port = PortHandler(args.port)
     packet = PacketHandler(2.0)
 
-    if not port.openPort():
-        sys.exit(f"{args.port} 포트를 열 수 없습니다.")
+    try:
+        opened = port.openPort()
+    except Exception as exc:
+        sys.exit(f"{args.port} 을 열 수 없습니다: {exc}\n"
+                 "  U2D2 가 연결되어 있는지, dialout 권한이 있는지 확인하세요.")
+    if not opened:
+        sys.exit(f"{args.port} 포트를 열 수 없습니다. U2D2 연결을 확인하세요.")
     if not port.setBaudRate(args.baud):
         port.closePort()
         sys.exit(f"baudrate {args.baud} 설정 실패")

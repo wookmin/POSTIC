@@ -15,7 +15,8 @@ try:
 except ImportError as exc:
     raise ImportError(
         "dynamixel_sdk 를 찾을 수 없습니다. "
-        "source /opt/ros/humble/setup.bash 후 다시 실행하세요."
+        "~/dynamixel-venv/bin/python 으로 실행하거나 "
+        "pip install -r requirements.txt 를 먼저 실행하세요."
     ) from exc
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +63,16 @@ def open_bus(config=None, port=None, baudrate=None):
     handler = PortHandler(port_name)
     packet = PacketHandler(float(bus["protocol"]))
 
-    if not handler.openPort():
+    # 장치 파일이 없으면 openPort() 는 False 를 돌려주는 대신 pyserial 예외를
+    # 던진다. U2D2 를 뽑았을 때 원시 트레이스백이 노출되지 않게 감싼다.
+    try:
+        opened = handler.openPort()
+    except Exception as exc:
+        raise BusError(
+            f"{port_name} 을 열 수 없습니다: {exc}\n"
+            "U2D2 가 연결되어 있는지, dialout 권한이 있는지 확인하세요."
+        ) from exc
+    if not opened:
         raise BusError(f"{port_name} 포트를 열 수 없습니다. "
                        "U2D2 연결과 dialout 권한을 확인하세요.")
     try:

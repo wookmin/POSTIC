@@ -1,6 +1,10 @@
 import json
+import sys
+from pathlib import Path
 
-from gemini.client import decide_posture
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.gemini.client import decide_posture  # noqa: E402
 
 
 features = {

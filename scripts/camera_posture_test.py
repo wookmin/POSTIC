@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import cv2
@@ -8,7 +9,9 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-from src.offline_pipeline import PoseFeatures, classify_posture
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.offline_pipeline import PoseFeatures, classify_posture  # noqa: E402
 
 
 NOSE = 0

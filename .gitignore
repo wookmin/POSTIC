@@ -1,1 +1,13 @@
+__pycache__/
+*.py[cod]
+
+# 시크릿 — 절대 커밋하지 않는다
 .env
+
+# 대용량 모델 가중치. 별도로 내려받는다.
+models/**/*.task
+
+data/logs/
+data/samples/
+venv/
+.venv/
