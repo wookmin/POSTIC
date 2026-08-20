@@ -1,0 +1,17 @@
+# 관절 이름 -> Dynamixel ID 매핑.
+#
+# 아직 확정되지 않았다. scripts/identify_joints.py --id N --go 로 모터를 하나씩
+# 흔들어 어느 관절인지 확인한 뒤 아래를 채운다.
+#
+# 예시:
+# joints:
+#   neck_pan:
+#     id: 1
+#     min_position: 1024      # ticks, 기계적 가동범위로 제한할 것
+#     max_position: 3072
+#     zero_position: 2048
+#
+joints: {}
+
+# 식별되지 않은 ID. 확인되는 대로 joints 로 옮긴다.
+unassigned: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
