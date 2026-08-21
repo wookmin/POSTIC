@@ -244,6 +244,7 @@ def run(args):
     fps_mark = time.monotonic()
     status_mark = 0.0
 
+    behavior = None
     stack = ExitStack()
     try:
         if args.move:
