@@ -1,13 +1,8 @@
 """자세 각 추출과 지연 버퍼 테스트. 카메라도 모터도 필요 없다."""
 
-import math
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.perception.posture_features import (  # noqa: E402
     LEFT_EAR, LEFT_HIP, LEFT_SHOULDER, NOSE, RIGHT_EAR, RIGHT_HIP,

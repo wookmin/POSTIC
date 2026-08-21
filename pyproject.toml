@@ -1,0 +1,16 @@
+[project]
+name = "posture-robot-proto"
+version = "0.1.0"
+description = "카메라로 본 자세를 로봇이 한 템포 늦게 따라하는 프로토타입"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

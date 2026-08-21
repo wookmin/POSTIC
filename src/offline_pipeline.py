@@ -61,9 +61,7 @@ def gemini_mock(posture: str) -> BehaviorCommand:
 
 
 def safety_validate(command: BehaviorCommand) -> BehaviorCommand:
-    command.speed = max(0, min(command.speed, 30))
-    command.duration_ms = max(0, min(command.duration_ms, 1500))
-
+    """입력을 변형하지 않고 검증된 새 인스턴스를 돌려준다."""
     allowed_behaviors = {
         "mimic_slouch",
         "mimic_forward_head",
@@ -79,7 +77,12 @@ def safety_validate(command: BehaviorCommand) -> BehaviorCommand:
             duration_ms=0,
         )
 
-    return command
+    return BehaviorCommand(
+        behavior=command.behavior,
+        speech=command.speech,
+        speed=max(0, min(command.speed, 30)),
+        duration_ms=max(0, min(command.duration_ms, 1500)),
+    )
 
 
 def mock_robot_execute(command: BehaviorCommand):

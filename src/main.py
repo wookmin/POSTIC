@@ -21,8 +21,6 @@ from pathlib import Path
 import cv2
 import yaml
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from src.camera.camera_stream import CameraError, CameraStream  # noqa: E402
 from src.perception.pose_estimator import (  # noqa: E402
     PoseEstimator, draw_angle_bar, draw_overlay, draw_skeleton,

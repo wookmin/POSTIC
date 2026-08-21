@@ -1,11 +1,6 @@
 """관절 매핑과 안전 계층 테스트. 하드웨어 없이 돈다."""
 
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.perception.posture_features import PostureAngles  # noqa: E402
 from src.robot.joint_mapper import (  # noqa: E402
