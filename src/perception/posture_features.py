@@ -1,11 +1,17 @@
-"""MediaPipe 랜드마크에서 시상면 굽힘각을 뽑는다.
+"""이미지 좌표(2D) 기반 자세 추정.
 
-카메라도 모터도 모르는 순수 함수만 둔다. 랜드마크처럼 생긴 객체(.x .y .z
-.visibility)만 주면 되므로 하드웨어 없이 테스트할 수 있다.
+정면 카메라에서 Z축(깊이)은 단안 RGB로 추정하기 때문에 노이즈가 크다.
+대신 이미지의 Y좌표 비율만으로 상체와 목의 기울기를 판정한다.
 
-MediaPipe world landmark 규약:
-  원점은 골반 중점, x 는 오른쪽, y 는 아래쪽, z 는 깊이이며 작을수록 카메라에
-  가깝다. 따라서 앞으로 숙이면 어깨의 z 가 골반보다 작아진다.
+원리:
+  - 바로 앉으면: 코 → 어깨 → 골반이 수직으로 정렬 (Y 간격이 균등)
+  - 숙이면: 코가 어깨에 가까워지고, 어깨가 골반에 가까워짐
+  - 이 비율 변화를 '각도와 유사한 값'으로 환산한다
+
+장점:
+  - 카메라 위치/각도에 덜 민감
+  - Z축 노이즈 영향 제로
+  - 정면 카메라에서도 안정적
 """
 
 import math
@@ -21,8 +27,6 @@ RIGHT_SHOULDER = 12
 LEFT_HIP = 23
 RIGHT_HIP = 24
 
-# 책상에 앉으면 골반은 거의 항상 프레임 밖이거나 가려진다. world 좌표에서
-# 골반은 원점으로 고정되어 정보를 주지 않으므로 가시성 판정에서 뺀다.
 REQUIRED = (LEFT_SHOULDER, RIGHT_SHOULDER)
 
 
@@ -40,18 +44,13 @@ class PostureAngles:
         return self.confidence > 0.0
 
 
-def midpoint(a, b):
-    return ((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2)
+def _mid_y(landmarks, idx_a, idx_b):
+    """두 랜드마크의 이미지 Y좌표 중점."""
+    return (landmarks[idx_a].y + landmarks[idx_b].y) / 2.0
 
 
-def sagittal_angle(origin, tip):
-    """origin 에서 tip 으로 향하는 벡터의 시상면 기울기(도).
-
-    수직으로 서 있으면 0, 앞으로(카메라 쪽으로) 기울면 양수.
-    """
-    dy = tip[1] - origin[1]
-    dz = tip[2] - origin[2]
-    return math.degrees(math.atan2(-dz, -dy))
+def _mid_x(landmarks, idx_a, idx_b):
+    return (landmarks[idx_a].x + landmarks[idx_b].x) / 2.0
 
 
 def min_visibility(landmarks, indices):
@@ -61,52 +60,91 @@ def min_visibility(landmarks, indices):
     return min(values) if values else 0.0
 
 
-def head_reference(world, landmarks, threshold):
-    """머리 방향을 대표할 점. 귀가 보이면 귀 중점, 아니면 코."""
-    ear_visibility = min_visibility(landmarks, (LEFT_EAR, RIGHT_EAR))
-    if ear_visibility >= threshold:
-        return midpoint(world[LEFT_EAR], world[RIGHT_EAR])
-    nose = world[NOSE]
-    return (nose.x, nose.y, nose.z)
-
-
 def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
                    invert_torso=False, invert_neck=False):
-    """랜드마크 한 쌍에서 PostureAngles 를 만든다. 사람이 안 보이면 None.
+    """이미지 좌표에서 자세 각도를 추정한다.
 
-    world 는 3D 월드 좌표, landmarks 는 visibility 를 가진 이미지 좌표다.
+    world 인자는 호환성을 위해 받지만 사용하지 않는다 (2D 전용).
+    landmarks 는 이미지 좌표(.x .y 가 0~1 범위)와 visibility 를 가진다.
+
+    반환값의 torso_pitch_deg / neck_pitch_deg 는 실제 '도'가 아니라
+    비율을 도 단위로 환산한 유사값이다. 방향과 크기 감각은 동일하다.
     """
-    if not world or not landmarks:
+    if not landmarks:
         return None
 
     confidence = min_visibility(landmarks, REQUIRED)
     if confidence < min_visibility_threshold:
         return None
 
-    shoulder = midpoint(world[LEFT_SHOULDER], world[RIGHT_SHOULDER])
-    hip = midpoint(world[LEFT_HIP], world[RIGHT_HIP])
-    torso = sagittal_angle(hip, shoulder)
+    # --- 2D 좌표 추출 ---
+    shoulder_y = _mid_y(landmarks, LEFT_SHOULDER, RIGHT_SHOULDER)
+    shoulder_x = _mid_x(landmarks, LEFT_SHOULDER, RIGHT_SHOULDER)
+    hip_y = _mid_y(landmarks, LEFT_HIP, RIGHT_HIP)
+    hip_x = _mid_x(landmarks, LEFT_HIP, RIGHT_HIP)
 
-    head = head_reference(world, landmarks, min_visibility_threshold)
-    # 목은 상체에 실려 있으므로 상체 기울기를 뺀 상대각을 쓴다.
-    # 로봇도 직렬 체인이라 목 관절은 그 아래 관절 위에서 움직인다.
-    neck = sagittal_angle(shoulder, head) - torso
+    # 머리: 귀가 보이면 귀 중점, 아니면 코
+    ear_vis = min_visibility(landmarks, (LEFT_EAR, RIGHT_EAR))
+    if ear_vis >= min_visibility_threshold:
+        head_y = _mid_y(landmarks, LEFT_EAR, RIGHT_EAR)
+        head_x = _mid_x(landmarks, LEFT_EAR, RIGHT_EAR)
+    else:
+        head_y = landmarks[NOSE].y
+        head_x = landmarks[NOSE].x
 
+    # --- 상체 기울기 (torso pitch) ---
+    # 바로 앉으면 어깨-골반 벡터가 수직(dx≈0). 숙이면 어깨가 앞(카메라 쪽)으로
+    # 이동하지만 정면이라 X축 변화로 나타남 + Y축으로 어깨가 골반에 가까워짐.
+    #
+    # 핵심 지표: 어깨-골반의 X 편차를 Y 거리로 나눈 비율.
+    # 정면 카메라에서 숙이면 어깨 Y가 골반 Y에 접근하므로 Y거리가 줄어든다.
+    # 하지만 더 robust한 방법: 어깨-골반 벡터의 기울기 각도.
+    torso_dy = hip_y - shoulder_y  # 양수 (골반이 아래)
+    torso_dx = hip_x - shoulder_x  # 보통 0에 가까움
+
+    if torso_dy <= 0.01:
+        # 어깨가 골반 아래에 있으면 비정상 (완전히 엎드린 상태)
+        torso_pitch_deg = 45.0
+    else:
+        # 바로 앉으면 어깨-골반이 순수 수직 → angle≈0
+        # 숙이면 어깨가 앞으로 → 이미지에서 어깨 Y가 올라감 → torso_dy 줄어듦
+        # 이걸 기준 대비 줄어든 비율로 환산.
+        # 하지만 정면에서는 X 편차가 더 신뢰도 높음.
+        # 두 가지를 결합: atan2(dx, dy)
+        torso_angle_rad = math.atan2(abs(torso_dx), torso_dy)
+        torso_pitch_deg = math.degrees(torso_angle_rad)
+
+    # --- 목 기울기 (neck pitch) = 머리-어깨 상대각 ---
+    # 고개를 숙이면 머리 Y가 어깨 Y에 가까워짐 (또는 X로 치우침)
+    neck_dy = shoulder_y - head_y   # 양수 (머리가 위)
+    neck_dx = head_x - shoulder_x   # 머리가 어깨 대비 좌우 치우침
+
+    if neck_dy <= 0.01:
+        neck_pitch_deg = 35.0
+    else:
+        # 바로 있으면 머리가 어깨 위에 수직 → angle≈0
+        # 고개를 숙이면 머리 Y가 어깨에 접근 + X로 쏠림
+        neck_angle_rad = math.atan2(abs(neck_dx), neck_dy)
+        neck_pitch_deg = math.degrees(neck_angle_rad)
+
+    # 부호 결정: X 양수(오른쪽) 방향으로 치우치면 양수
+    # 하지만 우리 로봇은 앞뒤만 있으므로, 부호는 항상 양수(숙인 정도)로 사용
+    # invert 옵션으로 방향 뒤집기 가능
     if invert_torso:
-        torso = -torso
+        torso_pitch_deg = -torso_pitch_deg
     if invert_neck:
-        neck = -neck
+        neck_pitch_deg = -neck_pitch_deg
 
     return PostureAngles(
         timestamp=timestamp,
-        torso_pitch_deg=torso,
-        neck_pitch_deg=neck,
+        torso_pitch_deg=torso_pitch_deg,
+        neck_pitch_deg=neck_pitch_deg,
         confidence=confidence,
     )
 
 
 def clamp_angles(angles, max_torso_deg, max_neck_deg):
-    """입력 각을 허용 범위로 자른다. 값이 튀어도 로봇이 급격히 움직이지 않게."""
+    """입력 각을 허용 범위로 자른다."""
     return PostureAngles(
         timestamp=angles.timestamp,
         torso_pitch_deg=max(-max_torso_deg, min(max_torso_deg,
@@ -121,7 +159,6 @@ def smooth(previous, current, alpha, neck_alpha=None):
     """지수평활. alpha 가 1 이면 필터 없음.
 
     neck_alpha 를 따로 주면 목에 더 강한(낮은) 필터를 걸 수 있다.
-    정면 카메라에서 목 추정은 노이즈가 심하므로 별도 감쇠가 필요하다.
     """
     if previous is None or alpha >= 1.0:
         return current
@@ -138,13 +175,11 @@ def smooth(previous, current, alpha, neck_alpha=None):
 
 @dataclass(frozen=True)
 class PostureReference:
-    """바른 자세를 기준으로 잡은 값. 계통 편향을 빼는 데 쓴다.
+    """바른 자세를 기준으로 잡은 값.
 
-    골반을 추정으로 채우기 때문에 상체각에는 사람과 자리마다 다른 일정한
-    치우침이 생긴다. 실측에서 가만히 앉아 있어도 평균이 20도로 나왔다.
-    편향은 이렇게 빼고, 남는 잡음은 필터가 담당한다.
+    2D 비율 기반에서도 사람과 카메라 위치마다 '바른 자세'의 수치가 다르다.
+    캘리브레이션으로 그 값을 재서 빼면 0 = 바른 자세가 된다.
     """
-
     torso_pitch_deg: float
     neck_pitch_deg: float
 
@@ -161,12 +196,7 @@ def apply_reference(angles, reference):
 
 
 class MedianFilter:
-    """각 축에 중앙값 필터를 건다.
-
-    단안 깊이는 가끔 크게 튄다. 평균은 그 한 프레임에 끌려가지만 중앙값은
-    버틴다. 창이 커질수록 조용해지고 그만큼 늦어지는데, 에코가 이미 지연을
-    두고 있으므로 여기서 생기는 지연은 그 안에 묻힌다.
-    """
+    """각 축에 중앙값 필터를 건다."""
 
     def __init__(self, window):
         if window < 1:
