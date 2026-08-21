@@ -56,6 +56,11 @@ class JointMapper:
     def neck_joint(self):
         return self._neck
 
+    @property
+    def joints(self):
+        """관절 이름 -> 설정 딕셔너리. 읽기 전용 참조."""
+        return self._joints
+
     def joint_ids(self):
         return {name: spec["id"] for name, spec in self._joints.items()}
 

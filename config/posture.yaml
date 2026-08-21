@@ -47,3 +47,6 @@ motion:
   person_lost_grace_sec: 0.5  # 이만큼 연속으로 안 보여야 복귀 시작
   return_to_neutral_sec: 2.0  # 사람이 사라지면 이 시간에 걸쳐 중립 복귀
   idle_release_sec: 3.0       # 중립 도달 후 토크 해제까지 대기
+  # NOTE: 단위 테스트(tests/test_safety.py)는 빠른 실행을 위해
+  # return_seconds=2.0, release_seconds=1.0 을 쓴다. 실환경에서는 위 값이
+  # 적용된다. 테스트가 config 를 직접 읽지 않는 것은 의도적이다.

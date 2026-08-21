@@ -102,13 +102,6 @@ def ping_all(packet, port):
     return found
 
 
-def check(comm, err, packet, what):
-    if comm != COMM_SUCCESS:
-        raise BusError(f"{what}: 통신 실패 - {packet.getTxRxResult(comm)}")
-    if err:
-        raise BusError(f"{what}: 모터 오류 - {packet.getRxPacketError(err)}")
-
-
 def install_signal_guards():
     """SIGTERM / SIGHUP 을 예외로 바꿔 finally 정리 코드가 반드시 돌게 한다.
 

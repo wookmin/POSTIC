@@ -9,6 +9,8 @@
 # ROS2 의 dynamixel_sdk 에 의존하지 않으므로 setup.bash 를 source 할 필요가 없다.
 
 # 카메라 / 자세 인식
+# mediapipe 1.0 은 numpy<2.x 로 빌드됐지만 런타임에는 numpy 2.x 와 호환된다.
+# 호환이 깨지면 numpy==1.26.4 로 내린다. (pip install 시 경고가 뜨지만 동작함)
 mediapipe==1.0.0
 opencv-python==5.0.0.93
 numpy==2.2.6

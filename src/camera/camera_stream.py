@@ -1,6 +1,17 @@
 """카메라 캡처. 열기 실패와 프레임 유실을 여기서 흡수한다."""
 
+import platform
+
 import cv2
+
+# 플랫폼별 캡처 백엔드. Linux 는 V4L2 가 안정적이고,
+# macOS 는 AVFoundation, Windows 는 DSHOW 를 쓴다.
+_BACKENDS = {
+    "Linux": cv2.CAP_V4L2,
+    "Darwin": cv2.CAP_AVFOUNDATION,
+    "Windows": cv2.CAP_DSHOW,
+}
+_DEFAULT_BACKEND = _BACKENDS.get(platform.system(), cv2.CAP_ANY)
 
 
 class CameraError(RuntimeError):
@@ -24,7 +35,7 @@ class CameraStream:
         source = self.source
         if isinstance(source, str) and source.isdigit():
             source = int(source)
-        self._capture = cv2.VideoCapture(source, cv2.CAP_V4L2)
+        self._capture = cv2.VideoCapture(source, _DEFAULT_BACKEND)
         if not self._capture.isOpened():
             self._capture.release()
             raise CameraError(

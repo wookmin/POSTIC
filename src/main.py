@@ -147,7 +147,7 @@ def build_writer(stack, mapper, config):
 
 def check_pose_within_limits(writer, mapper):
     """접힌 자세에서 토크를 걸면 아래 단이 과부하로 죽는다."""
-    joints = mapper._joints  # noqa: SLF001 - 같은 패키지 내부 사용
+    joints = mapper.joints
     positions = writer.read_positions()
     folded = []
     for name, spec in joints.items():
@@ -161,6 +161,48 @@ def check_pose_within_limits(writer, mapper):
         raise BusError("현재 자세가 운용 범위를 벗어나 있습니다.\n"
                        + "\n".join(folded)
                        + "\n손으로 컬럼을 세운 뒤 다시 실행하세요.")
+
+
+def print_status_line(now, status_mark, control, measured, played, fps):
+    """헤드리스 모드에서 0.5초마다 상태를 한 줄로 찍는다."""
+    if now - status_mark < 0.5:
+        return status_mark
+    measured_text = (
+        "torso {:+6.1f} neck {:+6.1f}".format(
+            measured.torso_pitch_deg, measured.neck_pitch_deg)
+        if measured else "사람 없음            ")
+    played_text = (
+        "torso {:+6.1f} neck {:+6.1f}".format(
+            played.torso_pitch_deg, played.neck_pitch_deg)
+        if played and played.valid else "대기                 ")
+    targets = control.last_targets
+    print(f"[{control.state:<9}] fps {fps:4.1f} | "
+          f"측정 {measured_text} | 재생 {played_text} | "
+          f"목표 {targets}", flush=True)
+    return now
+
+
+def draw_preview(frame, control, measured, played, echo, angles_config,
+                 landmarks, writer, fps):
+    """프리뷰 창에 스켈레톤과 오버레이를 그린다."""
+    draw_skeleton(frame, landmarks)
+    lines = [
+        f"state {control.state}   fps {fps:4.1f}   "
+        f"delay {echo['delay_sec']:.1f}s",
+        ("측정  torso {:+6.1f}  neck {:+6.1f}".format(
+            measured.torso_pitch_deg, measured.neck_pitch_deg)
+         if measured else "측정  사람을 찾는 중"),
+        ("재생  torso {:+6.1f}  neck {:+6.1f}".format(
+            played.torso_pitch_deg, played.neck_pitch_deg)
+         if played and played.valid else "재생  대기"),
+        "모터  " + ("구동" if writer else "dry-run"),
+    ]
+    draw_overlay(frame, lines)
+    if measured:
+        draw_angle_bar(frame, "torso", measured.torso_pitch_deg,
+                       angles_config["max_torso_pitch_deg"], 0)
+        draw_angle_bar(frame, "neck", measured.neck_pitch_deg,
+                       angles_config["max_neck_pitch_deg"], 1)
 
 
 def run(args):
@@ -290,41 +332,11 @@ def run(args):
                 played = buffer.sample(now - echo["delay_sec"])
 
                 if args.no_preview:
-                    # 창이 없으면 숫자로라도 체인이 도는지 보여야 한다.
-                    if now - status_mark >= 0.5:
-                        status_mark = now
-                        measured_text = (
-                            "torso {:+6.1f} neck {:+6.1f}".format(
-                                measured.torso_pitch_deg,
-                                measured.neck_pitch_deg)
-                            if measured else "사람 없음            ")
-                        played_text = (
-                            "torso {:+6.1f} neck {:+6.1f}".format(
-                                played.torso_pitch_deg, played.neck_pitch_deg)
-                            if played and played.valid else "대기                 ")
-                        targets = control.last_targets
-                        print(f"[{control.state:<9}] fps {fps:4.1f} | "
-                              f"측정 {measured_text} | 재생 {played_text} | "
-                              f"목표 {targets}", flush=True)
+                    status_mark = print_status_line(
+                        now, status_mark, control, measured, played, fps)
                 else:
-                    draw_skeleton(frame, landmarks)
-                    lines = [
-                        f"state {control.state}   fps {fps:4.1f}   "
-                        f"delay {echo['delay_sec']:.1f}s",
-                        ("측정  torso {:+6.1f}  neck {:+6.1f}".format(
-                            measured.torso_pitch_deg, measured.neck_pitch_deg)
-                         if measured else "측정  사람을 찾는 중"),
-                        ("재생  torso {:+6.1f}  neck {:+6.1f}".format(
-                            played.torso_pitch_deg, played.neck_pitch_deg)
-                         if played and played.valid else "재생  대기"),
-                        "모터  " + ("구동" if writer else "dry-run"),
-                    ]
-                    draw_overlay(frame, lines)
-                    if measured:
-                        draw_angle_bar(frame, "torso", measured.torso_pitch_deg,
-                                       angles_config["max_torso_pitch_deg"], 0)
-                        draw_angle_bar(frame, "neck", measured.neck_pitch_deg,
-                                       angles_config["max_neck_pitch_deg"], 1)
+                    draw_preview(frame, control, measured, played, echo,
+                                 angles_config, landmarks, writer, fps)
                     cv2.imshow("Posture Robot", frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key in (ord("q"), 27):
