@@ -22,17 +22,32 @@ class GeminiDecision(BaseModel):
     speech: str = Field(max_length=100)
 
 
-def decide_posture(posture: str, features: dict) -> GeminiDecision:
+def _get_client():
+    """모듈 레벨 싱글턴. 첫 호출 시 한 번만 Client 를 생성한다."""
     api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY가 설정되지 않았습니다.")
+    return genai.Client(api_key=api_key)
+
+
+# 모듈 임포트 시점이 아닌 첫 사용 시점에 생성하되, 이후 재사용한다.
+_client = None
+
+
+def _ensure_client():
+    global _client
+    if _client is None:
+        _client = _get_client()
+    return _client
+
+
+def decide_posture(posture: str, features: dict) -> GeminiDecision:
     model_name = os.getenv(
         "GEMINI_MODEL",
         "gemini-2.5-flash-lite",
     )
 
-    if not api_key:
-        raise RuntimeError("GEMINI_API_KEY가 설정되지 않았습니다.")
-
-    client = genai.Client(api_key=api_key)
+    client = _ensure_client()
 
     prompt = f"""
 너는 탁상형 자세 교정 로봇의 행동 판단 모듈이다.
