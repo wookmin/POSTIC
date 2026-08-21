@@ -308,7 +308,8 @@ def run(args):
                                             angles_config["max_torso_pitch_deg"],
                                             angles_config["max_neck_pitch_deg"])
                     measured = smooth(previous, measured,
-                                      angles_config["smoothing_alpha"])
+                                      angles_config["smoothing_alpha"],
+                                      angles_config.get("neck_smoothing_alpha"))
                     previous = measured
                     buffer.push(measured)
                 else:

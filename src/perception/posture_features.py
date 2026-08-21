@@ -117,16 +117,21 @@ def clamp_angles(angles, max_torso_deg, max_neck_deg):
     )
 
 
-def smooth(previous, current, alpha):
-    """지수평활. alpha 가 1 이면 필터 없음."""
+def smooth(previous, current, alpha, neck_alpha=None):
+    """지수평활. alpha 가 1 이면 필터 없음.
+
+    neck_alpha 를 따로 주면 목에 더 강한(낮은) 필터를 걸 수 있다.
+    정면 카메라에서 목 추정은 노이즈가 심하므로 별도 감쇠가 필요하다.
+    """
     if previous is None or alpha >= 1.0:
         return current
+    na = neck_alpha if neck_alpha is not None else alpha
     return PostureAngles(
         timestamp=current.timestamp,
         torso_pitch_deg=(alpha * current.torso_pitch_deg
                          + (1 - alpha) * previous.torso_pitch_deg),
-        neck_pitch_deg=(alpha * current.neck_pitch_deg
-                        + (1 - alpha) * previous.neck_pitch_deg),
+        neck_pitch_deg=(na * current.neck_pitch_deg
+                        + (1 - na) * previous.neck_pitch_deg),
         confidence=current.confidence,
     )
 

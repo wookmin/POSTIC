@@ -27,9 +27,10 @@ perception:
 
 angles:
   max_torso_pitch_deg: 45   # 입력 각을 이 범위로 자른다
-  max_neck_pitch_deg: 35
+  max_neck_pitch_deg: 15        # 정면 카메라에서 목 추정은 부정확 → 범위 축소
   median_window: 7          # 7프레임이면 스파이크 방어하면서 지연 최소화
-  smoothing_alpha: 0.55     # 0.55면 반응 빠르면서 떨림 억제. 기존 0.25는 너무 둔함
+  smoothing_alpha: 0.55     # 상체용. 0.55면 반응 빠르면서 떨림 억제
+  neck_smoothing_alpha: 0.15  # 목은 정면 카메라에서 노이즈가 심해서 훨씬 둔하게
 
 # 상체각을 4축에 나누는 비율. 합이 1.0.
 # 베이스는 위쪽 4단 전체를 이고 있어 모멘트가 가장 크므로 가장 적게 준다.
