@@ -1,0 +1,49 @@
+# 자세 모방 루프 설정.
+#
+# 카메라로 본 사람의 시상면 굽힘각을 지연 버퍼에 넣고, N초 뒤에 로봇이 재생한다.
+
+echo:
+  delay_sec: 1.5          # 한 템포. 사람 동작과 로봇 동작 사이의 지연
+  control_hz: 50          # 제어 스레드 주기. 인식 프레임레이트와 무관하다
+  buffer_seconds: 6.0     # 링 버퍼 길이. delay 보다 넉넉해야 한다
+
+perception:
+  # Intel RealSense SR300 의 RGB 스트림. 인덱스 대신 경로로 고정한다.
+  # USB 포트나 부팅 순서에 따라 /dev/videoN 의 번호가 바뀔 수 있는데,
+  # 이 장치는 video2~video5 를 쓰고 그중 video2 가 컬러다.
+  # 내장 720p 카메라를 쓰려면 /dev/video0 으로 바꾼다.
+  camera: /dev/video2
+  # lite / full / heavy. 무거울수록 랜드마크와 특히 깊이 추정이
+  # 정확하지만 프레임당 추론 시간이 늘어난다.
+  model: full
+  width: 640
+  height: 480
+  min_visibility: 0.5     # 이 아래면 사람을 못 본 것으로 친다
+  # 정면 카메라를 가정한다. 시상면 각은 world landmark 의 z(깊이)로 잡는데,
+  # 단일 RGB 카메라에서 z 는 가장 노이즈가 큰 축이다. 흔들리면 카메라를
+  # 측면에 두는 편이 훨씬 안정적이다.
+  invert_torso: false     # 앞으로 숙일 때 각이 음수면 true
+  invert_neck: false
+
+angles:
+  max_torso_pitch_deg: 45   # 입력 각을 이 범위로 자른다
+  max_neck_pitch_deg: 35
+  median_window: 15         # 중앙값 필터 창(프레임). 튀는 값을 버린다
+  smoothing_alpha: 0.25     # 지수평활. 1.0 이면 필터 없음
+
+# 상체각을 4축에 나누는 비율. 합이 1.0.
+# 베이스는 위쪽 4단 전체를 이고 있어 모멘트가 가장 크므로 가장 적게 준다.
+# 실제로 base_pitch 가 과부하(0x20)로 한 번 고장난 적이 있다.
+distribution:
+  base_pitch: 0.15
+  waist_pitch: 0.25
+  spine_lower_pitch: 0.30
+  spine_upper_pitch: 0.30
+
+motion:
+  profile_velocity: 40
+  profile_acceleration: 20
+  max_step_deg: 1.0           # 제어 주기당 관절 최대 변화. 50Hz 면 초당 50도
+  person_lost_grace_sec: 0.5  # 이만큼 연속으로 안 보여야 복귀 시작
+  return_to_neutral_sec: 2.0  # 사람이 사라지면 이 시간에 걸쳐 중립 복귀
+  idle_release_sec: 3.0       # 중립 도달 후 토크 해제까지 대기
