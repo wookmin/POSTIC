@@ -402,6 +402,8 @@ def main():
                              "생략하면 config/posture.yaml 의 perception.camera")
     parser.add_argument("--no-preview", action="store_true",
                         help="창을 띄우지 않는다 (헤드리스)")
+    parser.add_argument("--no-correction", action="store_true",
+                        help="Gemini 교정 판단을 끈다 (에코만)")
     return run(parser.parse_args())
 
 
