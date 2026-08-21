@@ -39,6 +39,7 @@ from src.robot.dynamixel_driver import (  # noqa: E402
 )
 from src.robot.joint_mapper import JointMapper, MappingError  # noqa: E402
 from src.robot.joint_writer import JointWriter, WriterError  # noqa: E402
+from src.behavior.behavior_manager import BehaviorManager
 from src.safety.supervisor import (  # noqa: E402
     STATE_IDLE, IdlePolicy, SlewLimiter, max_step_ticks,
 )
@@ -253,6 +254,14 @@ def run(args):
         control = ControlLoop(buffer, mapper, writer, config)
         control.start()
 
+        # 교정 판단 스레드 (--no-correction 이면 비활성)
+        behavior = None
+        if not args.no_correction and not args.calibrate:
+            behavior = BehaviorManager(config)
+            behavior.start()
+            print("교정 모드 활성. Gemini 가 자세를 판단합니다 "
+                  "(--no-correction 으로 끌 수 있음).")
+
         source = args.camera or perception.get("camera",
                                                perception.get("camera_index", 0))
         with CameraStream(source, perception["width"],
@@ -307,6 +316,18 @@ def run(args):
                     median.reset()
                     buffer.push(PostureAngles(now, 0.0, 0.0, 0.0))
 
+                # 교정 판단 스레드에 최신 자세 전달
+                if behavior is not None and measured is not None:
+                    behavior.update_posture(measured)
+
+                # 교정 이벤트 소비
+                if behavior is not None:
+                    event = behavior.poll_event()
+                    if event:
+                        d = event.decision
+                        print(f"[교정] [{d.action}] {d.speech} "
+                              f"(행동: {d.behavior}, 강도: {event.urgency})")
+
                 if calibration_deadline is not None:
                     if raw is not None:
                         calibration_samples.append(raw)
@@ -351,6 +372,8 @@ def run(args):
         print("\n중단됨")
         return 0
     finally:
+        if behavior is not None:
+            behavior.stop()
         if control is not None:
             control.stop_event.set()
             control.join(timeout=2.0)
