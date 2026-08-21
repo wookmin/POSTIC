@@ -3,7 +3,7 @@
 # 카메라로 본 사람의 시상면 굽힘각을 지연 버퍼에 넣고, N초 뒤에 로봇이 재생한다.
 
 echo:
-  delay_sec: 1.5          # 한 템포. 사람 동작과 로봇 동작 사이의 지연
+  delay_sec: 0.8          # 한 템포. 0.8초면 자연스럽게 따라오는 느낌
   control_hz: 50          # 제어 스레드 주기. 인식 프레임레이트와 무관하다
   buffer_seconds: 6.0     # 링 버퍼 길이. delay 보다 넉넉해야 한다
 
@@ -15,7 +15,7 @@ perception:
   camera: /dev/video2
   # lite / full / heavy. 무거울수록 랜드마크와 특히 깊이 추정이
   # 정확하지만 프레임당 추론 시간이 늘어난다.
-  model: full
+  model: heavy            # 깊이 추정 정확도 우선. FPS ~15 로 떨어지지만 충분
   width: 640
   height: 480
   min_visibility: 0.5     # 이 아래면 사람을 못 본 것으로 친다
@@ -28,8 +28,8 @@ perception:
 angles:
   max_torso_pitch_deg: 45   # 입력 각을 이 범위로 자른다
   max_neck_pitch_deg: 35
-  median_window: 15         # 중앙값 필터 창(프레임). 튀는 값을 버린다
-  smoothing_alpha: 0.25     # 지수평활. 1.0 이면 필터 없음
+  median_window: 7          # 7프레임이면 스파이크 방어하면서 지연 최소화
+  smoothing_alpha: 0.55     # 0.55면 반응 빠르면서 떨림 억제. 기존 0.25는 너무 둔함
 
 # 상체각을 4축에 나누는 비율. 합이 1.0.
 # 베이스는 위쪽 4단 전체를 이고 있어 모멘트가 가장 크므로 가장 적게 준다.
@@ -43,7 +43,7 @@ distribution:
 motion:
   profile_velocity: 40
   profile_acceleration: 20
-  max_step_deg: 1.0           # 제어 주기당 관절 최대 변화. 50Hz 면 초당 50도
+  max_step_deg: 1.5           # 제어 주기당 관절 최대 변화. 50Hz 면 초당 75도
   person_lost_grace_sec: 0.5  # 이만큼 연속으로 안 보여야 복귀 시작
   return_to_neutral_sec: 2.0  # 사람이 사라지면 이 시간에 걸쳐 중립 복귀
   idle_release_sec: 3.0       # 중립 도달 후 토크 해제까지 대기
