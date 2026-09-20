@@ -56,7 +56,7 @@ class BehaviorManager(threading.Thread):
         self._config = PolicyConfig(
             sustain_seconds=correction.get("sustain_seconds", 3.0),
             max_corrections_per_run=correction.get(
-                "max_corrections_per_run", 1),
+                "max_corrections_per_run", None),
             cooldown_seconds=correction.get("cooldown_seconds", 30.0),
             escalation_seconds=correction.get("escalation_seconds", 60.0),
         )

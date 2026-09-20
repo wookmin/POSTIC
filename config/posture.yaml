@@ -25,8 +25,8 @@ perception:
   invert_neck: false
 
 angles:
-  max_torso_pitch_deg: 40   # posture_trigger 시연용 과장 포즈 상한
-  max_neck_pitch_deg: 30    # posture_trigger 시연용 과장 포즈 상한
+  max_torso_pitch_deg: 60   # posture_trigger 시연용 과장 포즈 상한
+  max_neck_pitch_deg: 35    # 목 관절의 현재 소프트 한계(+/-35도)
   median_window: 7          # 7프레임이면 스파이크 방어하면서 지연 최소화
   smoothing_alpha: 0.55     # 상체용. 0.55면 반응 빠르면서 떨림 억제
   neck_smoothing_alpha: 0.35  # 2D 비율은 Z축보다 안정적 → 적당히 반응
@@ -54,8 +54,8 @@ motion:
 # 교정 판단 정책. BehaviorManager 가 이 값을 읽는다.
 correction:
   sustain_seconds: 3.0      # 나쁜 자세가 이만큼 지속돼야 교정 트리거
-  max_corrections_per_run: 1 # 한 번 반응하면 프로세스 재시작 전까지 재호출하지 않음
-  cooldown_seconds: 30.0    # 교정 후 재호출 금지 시간
+  max_corrections_per_run: null # 정상 복귀 후 나쁜 자세 에피소드마다 재호출
+  cooldown_seconds: 0.0     # 정상 복귀/재감지 정책만으로 재호출을 제어
   escalation_seconds: 60.0  # 같은 문제 반복 시 강도 높이는 기준
   check_interval_sec: 1.0   # 판단 스레드 체크 주기 (초)
 
@@ -89,10 +89,11 @@ intervention:
   poses:
     # 목·상체·어깨선 중 어느 항목이 나빠도 이 하나의 과장 포즈를 호출한다.
     # 4개 몸통 관절에 분배되므로 작은 값은 겉으로 거의 보이지 않는다.
-    # 관절별 운용 범위 안에서 시연용으로 크게 잡는다.
+    # 몸통 60도는 4개 관절에 분배된다. 목은 현재 관절 소프트 한계가
+    # 35도이므로 50도를 요청해도 실제 목표는 안전 게이트에서 제한된다.
     bad_posture:
-      torso_pitch_deg: 40.0
-      neck_pitch_deg: 30.0
+      torso_pitch_deg: 60.0
+      neck_pitch_deg: 35.0
 
 # TTS는 별도 스레드에서 실행된다. 기본은 로그만 남기는 dry-run이다.
 audio:

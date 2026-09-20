@@ -37,8 +37,8 @@ def should_trigger(state: PolicyState, posture: PostureState,
     Gemini를 호출한다.
     상태를 직접 갱신하므로 매 프레임 한 번만 호출해야 한다.
     """
-    # 현재 프로토타입은 한 번의 실행에서 첫 반응만 보여준다. 사용자가
-    # 정상 자세로 돌아와도 이 제한은 유지되며, 프로그램 재시작 시 초기화된다.
+    # 제한을 설정한 실험 모드에서만 실행 횟수를 제한한다. 기본 동작은
+    # 정상 자세로 돌아온 뒤 다음 나쁜 자세 에피소드에 다시 반응하는 것이다.
     if (config.max_corrections_per_run is not None
             and state.correction_count >= config.max_corrections_per_run):
         return False
