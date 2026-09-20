@@ -123,6 +123,15 @@ class TestExtractAngles2D:
         assert angles.torso_pitch_deg == 0.0
         assert angles.neck_pitch_deg > 15.0
 
+    def test_hips_out_of_frame_uses_upper_body_slouch_proxy(self):
+        points = build_slouch()
+        points[LEFT_HIP].visibility = 0.0
+        points[RIGHT_HIP].visibility = 0.0
+
+        angles = extract_angles(None, points, timestamp=1.0)
+
+        assert angles.torso_pitch_deg > 15.0
+
     def test_empty_input_returns_none(self):
         assert extract_angles(None, None, timestamp=1.0) is None
         assert extract_angles(None, [], timestamp=1.0) is None

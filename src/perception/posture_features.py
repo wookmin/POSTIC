@@ -115,10 +115,15 @@ def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
                                          (1.35 - torso_ratio) / 0.55))
     else:
         # 노트북 카메라가 어깨 위주로 잡혀도 사람과 목 자세는 측정한다.
-        # 골반이 보이지 않는 구간의 척추 굽힘값은 추측하지 않고 0으로 둔다.
+        # 골반이 보이지 않으면 머리-어깨 세로 비율을 보수적인 상체 굽힘
+        # proxy로 사용한다. 카메라 위치가 고정된 노트북 환경에서만 쓰며,
+        # 실제 척추 각도로 해석하지 않는다.
         hip_x = None
-        torso_compression = 0.0
+        torso_compression = None
     neck_ratio = neck_gap / scale
+    if torso_compression is None:
+        torso_compression = max(0.0, min(1.0,
+                                         (neck_ratio - 1.25) / 0.55))
     neck_compression = max(0.0, min(1.0, (0.95 - neck_ratio) / 0.45))
     torso_pitch_deg = torso_compression * 30.0
     neck_pitch_deg = neck_compression * 25.0
