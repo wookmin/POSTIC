@@ -67,3 +67,14 @@ def test_read_positions_rejects_partial_result(monkeypatch):
 
     with pytest.raises(module.WriterError, match="현재 위치를 읽지 못한 관절"):
         writer.read_positions()
+
+
+def test_read_positions_normalizes_signed_wrap_in_position_mode(monkeypatch):
+    writer, packet = make_writer(monkeypatch)
+    packet.read4ByteTxRx = lambda port, motor_id, addr: (
+        -1067 if motor_id == 1 else 50, module.COMM_SUCCESS, 0)
+
+    positions = writer.read_positions()
+
+    assert positions["a"] == 3029
+    assert positions["b"] == 50

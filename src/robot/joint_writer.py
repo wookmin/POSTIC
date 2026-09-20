@@ -15,6 +15,7 @@ ADDR_GOAL_POSITION = 116
 ADDR_PROFILE_ACCEL = 108
 ADDR_PROFILE_VELOCITY = 112
 GOAL_POSITION_BYTES = 4
+POSITION_TICKS_PER_REV = 4096
 
 
 class WriterError(RuntimeError):
@@ -121,7 +122,10 @@ class JointWriter:
                                                           132)
             if comm != COMM_SUCCESS or err:
                 continue
-            positions[name] = value - (1 << 32) if value >= (1 << 31) else value
+            # 2XL430은 위치 제어 모드에서 현재 위치를 한 바퀴 범위의
+            # unsigned tick으로 사용한다. SDK 값이 32비트 signed처럼
+            # 보이더라도 4096 tick 범위로 정규화해야 한다.
+            positions[name] = value % POSITION_TICKS_PER_REV
         missing = set(self._joint_ids) - set(positions)
         if missing:
             raise WriterError(f"현재 위치를 읽지 못한 관절: {sorted(missing)}")
