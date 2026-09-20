@@ -1,5 +1,7 @@
 """실험 조건이 실제 모터 출력까지 전달되는지 테스트한다."""
 
+from types import SimpleNamespace
+
 from src.main import ControlLoop
 from src.perception.posture_features import PostureAngles
 
@@ -187,3 +189,44 @@ def test_legacy_mirror_writes_neutral_when_person_returns():
               if isinstance(call, tuple) and call[0] == "write"]
     assert writes[0][1] == {"joint": 60}
     assert writes[1][1] == {"joint": 50}
+
+
+def test_posture_trigger_stays_neutral_after_behavior_release():
+    loop = ControlLoop(
+        buffer=None,
+        mapper=FakeMapper(),
+        writer=None,
+        config={
+            "echo": {"delay_sec": 0.0, "control_hz": 1000},
+            "motion": {
+                "return_to_neutral_sec": 2.0,
+                "idle_release_sec": 3.0,
+                "person_lost_grace_sec": 0.5,
+            },
+        },
+        safety_gate=FakeGate(),
+        condition="posture_trigger",
+    )
+    action = SimpleNamespace(
+        pose=PostureAngles(1.0, 8.0, 2.0, 1.0),
+        duration_sec=0.0,
+    )
+    loop.submit_behavior(action)
+    started = loop._behavior_started_at
+    loop.commanded = {"joint": 60}
+
+    desired, torque = loop._posture_trigger_output(
+        started + 1.0, True, "tracking")
+    assert desired == {"joint": 50}
+    assert torque is True
+
+    loop.commanded = {"joint": 50}
+    desired, torque = loop._posture_trigger_output(
+        started + 4.0, True, "tracking")
+    assert desired == {"joint": 50}
+    assert torque is False
+
+    desired, torque = loop._posture_trigger_output(
+        started + 4.1, True, "tracking")
+    assert desired == {"joint": 50}
+    assert torque is False

@@ -97,16 +97,19 @@ class ControlLoop(threading.Thread):
         self._behavior_returning = False
         self._behavior_return_started_at = None
         self._behavior_release_sec = motion["idle_release_sec"]
+        self._behavior_released = False
 
     def submit_behavior(self, action):
         """고정된 행동을 다음 제어 tick부터 재생한다."""
         if action is None:
-            return
+            return False
         with self._behavior_lock:
             self._behavior_action = action
             self._behavior_started_at = time.monotonic()
             self._behavior_returning = False
             self._behavior_return_started_at = None
+            self._behavior_released = False
+        return True
 
     def safe_stop(self, reason):
         """추적을 중지하고 finally의 중립 복귀 경로로 보낸다."""
@@ -117,6 +120,7 @@ class ControlLoop(threading.Thread):
             self._behavior_started_at = None
             self._behavior_returning = False
             self._behavior_return_started_at = None
+            self._behavior_released = False
         self.stop_event.set()
 
     def _behavior_pose(self, now):
@@ -171,8 +175,16 @@ class ControlLoop(threading.Thread):
                     with self._behavior_lock:
                         self._behavior_returning = False
                         self._behavior_return_started_at = None
+                        self._behavior_released = True
                     return dict(self.commanded), False
             return dict(self.neutral), True
+
+        with self._behavior_lock:
+            released = self._behavior_released
+        if released:
+            # 한 번 중립 복귀를 끝낸 뒤에는 다음 tick에서 시작 기준 자세로
+            # 되돌아가지 않고, 중립을 유지한 채 토크를 해제한다.
+            return dict(self.neutral), False
 
         if not person_visible:
             # 사람이 없으면 기존 IdlePolicy가 중립 복귀와 토크 해제를
@@ -193,7 +205,7 @@ class ControlLoop(threading.Thread):
     def _loop(self):
         if self.writer is not None and self.motion_enabled:
             self.writer.prepare()
-            self.commanded = self.writer.read_positions() or dict(self.neutral)
+            self.commanded = self.writer.read_positions()
             self._rest_targets = dict(self.commanded)
 
         next_tick = time.monotonic()
@@ -285,8 +297,6 @@ def check_pose_within_limits(writer, mapper):
     folded = []
     for name, spec in joints.items():
         position = positions.get(name)
-        if position is None:
-            continue
         if not spec["min_position"] <= position <= spec["max_position"]:
             folded.append(f"  {name} 현재 {position}, 운용 범위 "
                           f"{spec['min_position']}~{spec['max_position']}")
@@ -523,15 +533,35 @@ def run(args):
                         if event_is_current:
                             action = executor.build(event)
                             if action is not None:
+                                delivered = False
+                                simulated = False
                                 if action.pose is not None:
-                                    control.submit_behavior(action)
-                                applied_at = time.monotonic()
-                                if response_tracker is not None:
+                                    if writer is None:
+                                        simulated = True
+                                    else:
+                                        delivered = control.submit_behavior(action)
+                                if speaker is not None and action.speech:
+                                    delivered = (speaker.submit(action.speech)
+                                                 or delivered)
+                                if delivered and response_tracker is not None:
+                                    applied_at = time.monotonic()
                                     response_tracker.intervention(
                                         applied_at, event.posture_label,
                                         action.behavior)
-                                if speaker is not None and action.speech:
-                                    speaker.submit(action.speech, now=applied_at)
+                                elif simulated and event_logger is not None:
+                                    event_logger.record(
+                                        "intervention_simulated",
+                                        timestamp=time.monotonic(),
+                                        posture=event.posture_label,
+                                        behavior=action.behavior,
+                                    )
+                                elif not delivered and event_logger is not None:
+                                    event_logger.record(
+                                        "intervention_skipped",
+                                        timestamp=time.monotonic(),
+                                        posture=event.posture_label,
+                                        reason="delivery_failed",
+                                    )
                             else:
                                 # 실행기가 행동을 만들지 못한 경우도 실제
                                 # 개입이 아니므로 다음 감지를 허용한다.

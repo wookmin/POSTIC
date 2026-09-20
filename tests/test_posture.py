@@ -87,6 +87,16 @@ class TestExtractAngles2D:
         assert angles.lateral_tilt_deg > 15.0
         assert angles.torso_pitch_deg < 12.0
 
+    def test_small_center_offset_does_not_become_lateral_during_slouch(self):
+        points = build_slouch()
+        for idx in (LEFT_SHOULDER, RIGHT_SHOULDER):
+            points[idx].x += 0.01
+
+        angles = extract_angles(None, points, timestamp=1.0)
+
+        assert angles.torso_pitch_deg > 15.0
+        assert angles.lateral_tilt_deg < 12.0
+
     def test_mirrored_horizontal_landmarks_are_not_lateral_tilt(self):
         points = build_upright()
         for left, right in ((LEFT_SHOULDER, RIGHT_SHOULDER),

@@ -27,6 +27,11 @@ class FakePacket:
     def getRxPacketError(self, code):
         return f"error-{code}"
 
+    def read4ByteTxRx(self, port, motor_id, addr):
+        if motor_id in self.failing_ids:
+            return 0, 1, 0
+        return 50, module.COMM_SUCCESS, 0
+
 
 def make_writer(monkeypatch, failing_ids=()):
     monkeypatch.setattr(module, "GroupSyncWrite", FakeSyncWrite)
@@ -55,3 +60,10 @@ def test_torque_off_retries_unknown_and_does_not_skip_known_joint(monkeypatch):
 
     assert writer.torque_states == {"a": False, "b": False}
     assert [item[0] for item in packet.writes] == [1, 2]
+
+
+def test_read_positions_rejects_partial_result(monkeypatch):
+    writer, _ = make_writer(monkeypatch, failing_ids={2})
+
+    with pytest.raises(module.WriterError, match="현재 위치를 읽지 못한 관절"):
+        writer.read_positions()

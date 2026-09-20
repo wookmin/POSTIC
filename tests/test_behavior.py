@@ -133,6 +133,12 @@ class TestPolicy:
         assert should_trigger(state, lateral, 10.0, self.config) is False
         assert state.armed is False
 
+    def test_pitch_problem_takes_priority_over_lateral_label(self):
+        state = classify(PostureAngles(1.0, 25.0, 15.0, 1.0,
+                                       lateral_tilt_deg=20.0))
+
+        assert state.label == "slouch_and_forward"
+
     def test_skipped_event_can_be_rearmed(self):
         manager = BehaviorManager({
             "experiment": {"condition": "posture_trigger"},

@@ -122,4 +122,7 @@ class JointWriter:
             if comm != COMM_SUCCESS or err:
                 continue
             positions[name] = value - (1 << 32) if value >= (1 << 31) else value
+        missing = set(self._joint_ids) - set(positions)
+        if missing:
+            raise WriterError(f"현재 위치를 읽지 못한 관절: {sorted(missing)}")
         return positions

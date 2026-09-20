@@ -128,8 +128,10 @@ def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
                                             max(shoulder_dx, 0.02)))
     hip_line = math.degrees(math.atan2(hip_dy, max(hip_dx, 0.02)))
     center_offset = abs(shoulder_x - hip_x) / scale
-    center_tilt = math.degrees(math.atan2(center_offset,
-                                          max(torso_gap, 0.02)))
+    # torso_gap을 분모로 쓰면 앞으로 숙일수록 같은 작은 중심 오차가
+    # lateral 값으로 과장된다. 몸 크기(scale)를 기준으로 계산해야
+    # 구부정함과 좌우 기울기를 분리할 수 있다.
+    center_tilt = math.degrees(math.atan2(center_offset, 1.0))
     lateral_tilt_deg = max(abs(shoulder_line), abs(hip_line), center_tilt)
 
     # 부호 결정: X 양수(오른쪽) 방향으로 치우치면 양수

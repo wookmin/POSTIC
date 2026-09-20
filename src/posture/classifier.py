@@ -63,16 +63,16 @@ def classify(angles: PostureAngles) -> PostureState:
     torso_severity = max(0.0, min(1.0, torso / 45.0)) if torso > 0 else 0.0
     neck_severity = max(0.0, min(1.0, neck / 35.0)) if neck > 0 else 0.0
 
-    # 현재 로봇은 pitch만 표현할 수 있으므로 좌우 기울기는 별도 상태로
-    # 남긴다. 이를 slouch로 바꾸면 정면 웹캠에서 오작동할 때 로봇이 움직인다.
-    if lateral_bad:
-        label = "lateral_tilt"
-    elif torso_bad and neck_bad:
+    # 현재 로봇은 pitch만 표현할 수 있으므로 순수 좌우 기울기는 별도
+    # 상태로 남긴다. 두 축이 함께 나쁘면 표현 가능한 pitch 교정을 우선한다.
+    if torso_bad and neck_bad:
         label = "slouch_and_forward"
     elif torso_bad:
         label = "slouch"
     elif neck_bad:
         label = "forward_head"
+    elif lateral_bad:
+        label = "lateral_tilt"
     else:
         label = "good"
 
