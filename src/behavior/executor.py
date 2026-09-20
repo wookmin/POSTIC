@@ -42,7 +42,9 @@ class BehaviorExecutor:
             intervention.get("action_duration_sec",
                             experiment.get("action_duration_sec", 1.0)))
         self.fixed_poses = {
-            "bad_posture": {"torso_pitch_deg": 14.0, "neck_pitch_deg": 14.0},
+            # 몸통 각도는 4개 관절에 나뉘므로 작은 값은 실제로 거의
+            # 보이지 않는다. 기본값도 시연용 과장 포즈로 둔다.
+            "bad_posture": {"torso_pitch_deg": 27.0, "neck_pitch_deg": 24.0},
             "slouch": {"torso_pitch_deg": 14.0, "neck_pitch_deg": 4.0},
             "forward_head": {"torso_pitch_deg": 4.0, "neck_pitch_deg": 14.0},
             "slouch_and_forward": {
