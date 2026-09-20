@@ -45,7 +45,7 @@ class BehaviorExecutor:
         self.fixed_poses = {
             # 몸통 각도는 4개 관절에 나뉘므로 작은 값은 실제로 거의
             # 보이지 않는다. 기본값도 시연용 과장 포즈로 둔다.
-            "bad_posture": {"torso_pitch_deg": 30.0, "neck_pitch_deg": 25.0},
+            "bad_posture": {"torso_pitch_deg": 40.0, "neck_pitch_deg": 30.0},
             "slouch": {"torso_pitch_deg": 14.0, "neck_pitch_deg": 4.0},
             "forward_head": {"torso_pitch_deg": 4.0, "neck_pitch_deg": 14.0},
             "slouch_and_forward": {

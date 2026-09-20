@@ -14,6 +14,7 @@ from src.posture.classifier import PostureState
 class PolicyConfig:
     """정책 파라미터. posture.yaml 의 correction 섹션에서 읽는다."""
     sustain_seconds: float = 3.0      # 나쁜 자세가 이만큼 지속돼야 트리거
+    max_corrections_per_run: int | None = None  # None이면 횟수 제한 없음
     cooldown_seconds: float = 30.0    # 교정 후 재호출 금지 시간
     escalation_seconds: float = 60.0  # 같은 문제 반복 시 강도 높이는 기준
 
@@ -36,6 +37,12 @@ def should_trigger(state: PolicyState, posture: PostureState,
     Gemini를 호출한다.
     상태를 직접 갱신하므로 매 프레임 한 번만 호출해야 한다.
     """
+    # 현재 프로토타입은 한 번의 실행에서 첫 반응만 보여준다. 사용자가
+    # 정상 자세로 돌아와도 이 제한은 유지되며, 프로그램 재시작 시 초기화된다.
+    if (config.max_corrections_per_run is not None
+            and state.correction_count >= config.max_corrections_per_run):
+        return False
+
     # unknown은 나쁜 자세가 아니다. 관측 불가 구간을 지속시간에 포함하지
     # 않기 위해 타이머를 끊고, 다시 보인 시점부터 새로 측정한다.
     if posture.label == "unknown":

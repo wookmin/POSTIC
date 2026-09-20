@@ -101,6 +101,24 @@ class TestPolicy:
         should_trigger(state, bad, 13.0, self.config)
         assert should_trigger(state, bad, 14.0, self.config) is True
 
+    def test_one_shot_does_not_retrigger_after_recovery(self):
+        state = PolicyState()
+        config = PolicyConfig(
+            sustain_seconds=3.0,
+            max_corrections_per_run=1,
+            cooldown_seconds=0.0,
+        )
+        bad = classify(PostureAngles(1.0, 25.0, 3.0, 1.0))
+        good = classify(PostureAngles(1.0, 5.0, 3.0, 1.0))
+
+        for t in range(4):
+            should_trigger(state, bad, float(t), config)
+        assert state.correction_count == 1
+        should_trigger(state, good, 10.0, config)
+
+        for t in range(11, 16):
+            assert should_trigger(state, bad, float(t), config) is False
+
     def test_good_posture_resets_timer(self):
         state = PolicyState()
         bad = classify(PostureAngles(1.0, 25.0, 3.0, 1.0))
