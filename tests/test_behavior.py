@@ -36,7 +36,7 @@ class TestClassifier:
         state = classify(angles)
         assert state.label == "lateral_tilt"
         assert state.is_bad is True
-        assert state.is_triggerable_bad is False
+        assert state.is_triggerable_bad is True
 
     def test_invalid_angles_are_unknown(self):
         angles = PostureAngles(1.0, 30.0, 20.0, 0.0)  # confidence=0 → invalid
@@ -125,13 +125,15 @@ class TestPolicy:
         assert state.bad_since is None
         assert should_trigger(state, bad, 11.0, self.config) is False
 
-    def test_lateral_tilt_does_not_rearm_after_correction(self):
-        state = PolicyState(armed=False, last_label="slouch")
+    def test_lateral_tilt_triggers_generic_correction(self):
+        state = PolicyState()
         lateral = classify(PostureAngles(1.0, 5.0, 3.0, 1.0,
                                          lateral_tilt_deg=20.0))
 
-        assert should_trigger(state, lateral, 10.0, self.config) is False
-        assert state.armed is False
+        for timestamp in range(3):
+            assert should_trigger(state, lateral, float(timestamp),
+                                  self.config) is False
+        assert should_trigger(state, lateral, 3.0, self.config) is True
 
     def test_pitch_problem_takes_priority_over_lateral_label(self):
         state = classify(PostureAngles(1.0, 25.0, 15.0, 1.0,
@@ -229,6 +231,25 @@ class TestBehaviorExecutor:
         assert action.pose.neck_pitch_deg == 2.0
         assert action.pose.torso_pitch_deg != observed.torso_pitch_deg
         assert action.speech == ""
+
+    def test_posture_trigger_uses_one_generic_pose_for_lateral_bad_posture(self):
+        executor = BehaviorExecutor({
+            "experiment": {"condition": "posture_trigger"},
+            "intervention": {
+                "poses": {
+                    "bad_posture": {
+                        "torso_pitch_deg": 14.0,
+                        "neck_pitch_deg": 14.0,
+                    },
+                },
+            },
+        }, FakeGate())
+
+        action = executor.build(self.event(posture_label="lateral_tilt"))
+
+        assert action.behavior == "bad_posture"
+        assert action.pose.torso_pitch_deg == 14.0
+        assert action.pose.neck_pitch_deg == 14.0
 
     def test_posture_trigger_ignores_unknown_label(self):
         executor = BehaviorExecutor(

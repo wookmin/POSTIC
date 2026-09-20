@@ -84,13 +84,8 @@ intervention:
   action_duration_sec: 1.5
   max_event_age_sec: 0.75  # 실행 직전 최신 자세와 이벤트 시각을 재확인
   poses:
-    slouch:
-      torso_pitch_deg: 14.0
-      neck_pitch_deg: 4.0
-    forward_head:
-      torso_pitch_deg: 4.0
-      neck_pitch_deg: 14.0
-    slouch_and_forward:
+    # 목·상체·어깨선 중 어느 항목이 나빠도 이 하나의 과장 포즈를 호출한다.
+    bad_posture:
       torso_pitch_deg: 14.0
       neck_pitch_deg: 14.0
 

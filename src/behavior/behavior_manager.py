@@ -173,6 +173,7 @@ class BehaviorManager(threading.Thread):
         모델이 각도나 새로운 행동을 만들어낼 수 없게 해 실험 반복성을 지킨다.
         """
         behaviors = {
+            "lateral_tilt": "mimic_bad_posture",
             "slouch": "mimic_slouch",
             "forward_head": "mimic_forward_head",
             "slouch_and_forward": "mimic_slouch",

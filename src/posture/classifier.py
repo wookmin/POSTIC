@@ -31,8 +31,8 @@ class PostureState:
 
     @property
     def is_triggerable_bad(self):
-        """현재 로봇의 pitch 고정 포즈로 표현할 수 있는 나쁜 자세인지 반환한다."""
-        return self.label in {"slouch", "forward_head", "slouch_and_forward"}
+        """고정된 과장 포즈로 반응할 나쁜 자세인지 반환한다."""
+        return self.is_bad
 
 
 # 임계값 (도). 이 이상이면 나쁜 자세로 판정.

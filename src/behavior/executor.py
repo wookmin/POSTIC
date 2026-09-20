@@ -42,6 +42,7 @@ class BehaviorExecutor:
             intervention.get("action_duration_sec",
                             experiment.get("action_duration_sec", 1.0)))
         self.fixed_poses = {
+            "bad_posture": {"torso_pitch_deg": 14.0, "neck_pitch_deg": 14.0},
             "slouch": {"torso_pitch_deg": 14.0, "neck_pitch_deg": 4.0},
             "forward_head": {"torso_pitch_deg": 4.0, "neck_pitch_deg": 14.0},
             "slouch_and_forward": {
@@ -58,6 +59,8 @@ class BehaviorExecutor:
                         values.get("neck_pitch_deg",
                                   self.fixed_poses[label]["neck_pitch_deg"])),
                 }
+        self._generic_pose_configured = (
+            "bad_posture" in (intervention.get("poses") or {}))
 
     def build(self, event):
         """CorrectionEvent를 실행 가능한 BehaviorAction으로 만든다."""
@@ -84,7 +87,10 @@ class BehaviorExecutor:
                     "mimic_slouch": "slouch",
                     "mimic_forward_head": "forward_head",
                 }.get(decision.behavior)
-            values = self.fixed_poses.get(posture_label)
+            use_generic = (self._generic_pose_configured
+                            or posture_label == "lateral_tilt")
+            values = (self.fixed_poses["bad_posture"] if use_generic
+                      else self.fixed_poses.get(posture_label))
             if values is None:
                 return None
             pose = PostureAngles(
@@ -94,7 +100,7 @@ class BehaviorExecutor:
                 confidence=1.0,
             )
             return BehaviorAction(
-                behavior=posture_label,
+                behavior="bad_posture" if use_generic else posture_label,
                 pose=self.safety_gate.clamp_pose(pose),
                 duration_sec=self.safety_gate.clamp_duration(self.duration_sec),
                 # 현재 프로토타입은 음성 장치 없이 모션만 검증한다.

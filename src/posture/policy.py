@@ -43,9 +43,8 @@ def should_trigger(state: PolicyState, posture: PostureState,
         state.last_label = "unknown"
         return False
 
-    # 좋은 자세로 돌아왔을 때만 재무장한다. lateral_tilt은 인식은 하되
-    # 현재 pitch-only 로봇이 표현할 고정 포즈가 없으므로 트리거하지 않으며,
-    # 이미 실행된 이벤트를 lateral_tilt만으로 다시 무장시키지 않는다.
+    # 좋은 자세로 돌아왔을 때만 재무장한다. 목, 상체, 어깨선 중 어느
+    # 하나라도 나쁘면 같은 고정 과장 포즈를 호출한다.
     if posture.label == "good":
         state.bad_since = None
         # 마지막 교정 후 20초 이상 좋은 자세면 연속 카운트 리셋
@@ -53,11 +52,6 @@ def should_trigger(state: PolicyState, posture: PostureState,
             state.correction_count = 0
         state.last_label = "good"
         state.armed = True
-        return False
-
-    if posture.label == "lateral_tilt":
-        state.bad_since = None
-        state.last_label = "lateral_tilt"
         return False
 
     is_bad = posture.is_triggerable_bad
