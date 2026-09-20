@@ -112,6 +112,17 @@ class TestExtractAngles2D:
         points = build_upright(visibility=0.2)
         assert extract_angles(None, points, timestamp=1.0) is None
 
+    def test_hips_out_of_frame_still_measures_person_and_neck(self):
+        points = build_forward_head()
+        points[LEFT_HIP].visibility = 0.0
+        points[RIGHT_HIP].visibility = 0.0
+
+        angles = extract_angles(None, points, timestamp=1.0)
+
+        assert angles is not None
+        assert angles.torso_pitch_deg == 0.0
+        assert angles.neck_pitch_deg > 15.0
+
     def test_empty_input_returns_none(self):
         assert extract_angles(None, None, timestamp=1.0) is None
         assert extract_angles(None, [], timestamp=1.0) is None

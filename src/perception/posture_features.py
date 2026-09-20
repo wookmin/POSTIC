@@ -28,7 +28,7 @@ RIGHT_SHOULDER = 12
 LEFT_HIP = 23
 RIGHT_HIP = 24
 
-REQUIRED = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
+REQUIRED = (LEFT_SHOULDER, RIGHT_SHOULDER)
 
 
 @dataclass(frozen=True)
@@ -84,8 +84,8 @@ def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
     # --- 2D 좌표 추출 ---
     shoulder_y = _mid_y(landmarks, LEFT_SHOULDER, RIGHT_SHOULDER)
     shoulder_x = _mid_x(landmarks, LEFT_SHOULDER, RIGHT_SHOULDER)
-    hip_y = _mid_y(landmarks, LEFT_HIP, RIGHT_HIP)
-    hip_x = _mid_x(landmarks, LEFT_HIP, RIGHT_HIP)
+    hips_visible = (min_visibility(landmarks, (LEFT_HIP, RIGHT_HIP))
+                    >= min_visibility_threshold)
 
     # 머리: 귀가 보이면 귀 중점, 아니면 코
     ear_vis = min_visibility(landmarks, (LEFT_EAR, RIGHT_EAR))
@@ -100,15 +100,25 @@ def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
     # 노트북 카메라용 자세 변화 지표다.
     shoulder_width = abs(
         landmarks[RIGHT_SHOULDER].x - landmarks[LEFT_SHOULDER].x)
-    hip_width = abs(landmarks[RIGHT_HIP].x - landmarks[LEFT_HIP].x)
-    scale = max(shoulder_width, hip_width, 0.02)
-    torso_gap = max(0.0, hip_y - shoulder_y)
+    scale = max(shoulder_width, 0.02)
     neck_gap = max(0.0, shoulder_y - head_y)
-    torso_ratio = torso_gap / scale
-    neck_ratio = neck_gap / scale
 
     # 사용자별 calibration 없이 쓰기 위한 보수적인 기준이다.
-    torso_compression = max(0.0, min(1.0, (1.35 - torso_ratio) / 0.55))
+    if hips_visible:
+        hip_y = _mid_y(landmarks, LEFT_HIP, RIGHT_HIP)
+        hip_x = _mid_x(landmarks, LEFT_HIP, RIGHT_HIP)
+        hip_width = abs(landmarks[RIGHT_HIP].x - landmarks[LEFT_HIP].x)
+        scale = max(shoulder_width, hip_width, 0.02)
+        torso_gap = max(0.0, hip_y - shoulder_y)
+        torso_ratio = torso_gap / scale
+        torso_compression = max(0.0, min(1.0,
+                                         (1.35 - torso_ratio) / 0.55))
+    else:
+        # 노트북 카메라가 어깨 위주로 잡혀도 사람과 목 자세는 측정한다.
+        # 골반이 보이지 않는 구간의 척추 굽힘값은 추측하지 않고 0으로 둔다.
+        hip_x = None
+        torso_compression = 0.0
+    neck_ratio = neck_gap / scale
     neck_compression = max(0.0, min(1.0, (0.95 - neck_ratio) / 0.45))
     torso_pitch_deg = torso_compression * 30.0
     neck_pitch_deg = neck_compression * 25.0
@@ -120,19 +130,21 @@ def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
                      - landmarks[LEFT_SHOULDER].x)
     shoulder_dy = abs(landmarks[RIGHT_SHOULDER].y
                      - landmarks[LEFT_SHOULDER].y)
-    hip_dx = abs(landmarks[RIGHT_HIP].x - landmarks[LEFT_HIP].x)
-    hip_dy = abs(landmarks[RIGHT_HIP].y - landmarks[LEFT_HIP].y)
     # 좌우 반전된 영상에서도 dx의 부호 때문에 180도가 나오지 않도록
     # 선분의 방향이 아니라 기울기의 크기만 계산한다.
     shoulder_line = math.degrees(math.atan2(shoulder_dy,
                                             max(shoulder_dx, 0.02)))
-    hip_line = math.degrees(math.atan2(hip_dy, max(hip_dx, 0.02)))
-    center_offset = abs(shoulder_x - hip_x) / scale
-    # torso_gap을 분모로 쓰면 앞으로 숙일수록 같은 작은 중심 오차가
-    # lateral 값으로 과장된다. 몸 크기(scale)를 기준으로 계산해야
-    # 구부정함과 좌우 기울기를 분리할 수 있다.
-    center_tilt = math.degrees(math.atan2(center_offset, 1.0))
-    lateral_tilt_deg = max(abs(shoulder_line), abs(hip_line), center_tilt)
+    lateral_values = [abs(shoulder_line)]
+    if hips_visible:
+        hip_dx = abs(landmarks[RIGHT_HIP].x - landmarks[LEFT_HIP].x)
+        hip_dy = abs(landmarks[RIGHT_HIP].y - landmarks[LEFT_HIP].y)
+        hip_line = math.degrees(math.atan2(hip_dy, max(hip_dx, 0.02)))
+        center_offset = abs(shoulder_x - hip_x) / scale
+        # torso_gap을 분모로 쓰면 앞으로 숙일수록 같은 작은 중심 오차가
+        # lateral 값으로 과장된다. 몸 크기(scale)를 기준으로 계산한다.
+        center_tilt = math.degrees(math.atan2(center_offset, 1.0))
+        lateral_values.extend((abs(hip_line), center_tilt))
+    lateral_tilt_deg = max(lateral_values)
 
     # 부호 결정: X 양수(오른쪽) 방향으로 치우치면 양수
     # 하지만 우리 로봇은 앞뒤만 있으므로, 부호는 항상 양수(숙인 정도)로 사용
