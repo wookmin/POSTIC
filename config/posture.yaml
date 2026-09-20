@@ -82,6 +82,7 @@ experiment:
 # 실제 모터 목표는 JointMapper와 SafetyGate가 운용 범위 안에서 제한한다.
 intervention:
   action_duration_sec: 1.0
+  max_event_age_sec: 0.75  # 실행 직전 최신 자세와 이벤트 시각을 재확인
   poses:
     slouch:
       torso_pitch_deg: 8.0

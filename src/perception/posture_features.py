@@ -1,15 +1,16 @@
 """이미지 좌표(2D) 기반 자세 추정.
 
 정면 카메라에서 Z축(깊이)은 단안 RGB로 추정하기 때문에 노이즈가 크다.
-대신 이미지의 Y좌표 비율만으로 상체와 목의 기울기를 판정한다.
+대신 신체 크기로 정규화한 Y축 압축량과 좌우 기울기를 분리한다.
 
 원리:
   - 바로 앉으면: 코 → 어깨 → 골반이 수직으로 정렬 (Y 간격이 균등)
-  - 숙이면: 코가 어깨에 가까워지고, 어깨가 골반에 가까워짐
-  - 이 비율 변화를 '각도와 유사한 값'으로 환산한다
+  - 앞으로 숙이면: 머리-어깨와 어깨-골반의 세로 간격이 줄어든다
+  - 좌우로 기울이면: 어깨선·골반선이 기울거나 몸통 중심이 옆으로 이동한다
+  - 두 값을 분리해 좌우 기울기를 구부정함으로 잘못 판정하지 않는다
 
 장점:
-  - 카메라 위치/각도에 덜 민감
+  - 사람과 카메라 사이 거리 변화에 덜 민감
   - Z축 노이즈 영향 제로
   - 정면 카메라에서도 안정적
 """
@@ -27,7 +28,7 @@ RIGHT_SHOULDER = 12
 LEFT_HIP = 23
 RIGHT_HIP = 24
 
-REQUIRED = (LEFT_SHOULDER, RIGHT_SHOULDER)
+REQUIRED = (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,9 @@ class PostureAngles:
     torso_pitch_deg: float
     neck_pitch_deg: float
     confidence: float
+    lateral_tilt_deg: float = 0.0
+    torso_compression: float = 0.0
+    neck_compression: float = 0.0
 
     @property
     def valid(self):
@@ -87,45 +91,46 @@ def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
     ear_vis = min_visibility(landmarks, (LEFT_EAR, RIGHT_EAR))
     if ear_vis >= min_visibility_threshold:
         head_y = _mid_y(landmarks, LEFT_EAR, RIGHT_EAR)
-        head_x = _mid_x(landmarks, LEFT_EAR, RIGHT_EAR)
     else:
         head_y = landmarks[NOSE].y
-        head_x = landmarks[NOSE].x
 
-    # --- 상체 기울기 (torso pitch) ---
-    # 바로 앉으면 어깨-골반 벡터가 수직(dx≈0). 숙이면 어깨가 앞(카메라 쪽)으로
-    # 이동하지만 정면이라 X축 변화로 나타남 + Y축으로 어깨가 골반에 가까워짐.
-    #
-    # 핵심 지표: 어깨-골반의 X 편차를 Y 거리로 나눈 비율.
-    # 정면 카메라에서 숙이면 어깨 Y가 골반 Y에 접근하므로 Y거리가 줄어든다.
-    # 하지만 더 robust한 방법: 어깨-골반 벡터의 기울기 각도.
-    torso_dy = hip_y - shoulder_y  # 양수 (골반이 아래)
-    torso_dx = hip_x - shoulder_x  # 보통 0에 가까움
+    # --- 전방 굽힘 proxy ---
+    # 단안 정면 카메라는 실제 깊이 방향 각도를 볼 수 없다. 어깨 너비를
+    # 신체 크기로 사용해 세로 간격을 정규화한다. 이 값은 실제 각도가 아니라
+    # 노트북 카메라용 자세 변화 지표다.
+    shoulder_width = abs(
+        landmarks[RIGHT_SHOULDER].x - landmarks[LEFT_SHOULDER].x)
+    hip_width = abs(landmarks[RIGHT_HIP].x - landmarks[LEFT_HIP].x)
+    scale = max(shoulder_width, hip_width, 0.02)
+    torso_gap = max(0.0, hip_y - shoulder_y)
+    neck_gap = max(0.0, shoulder_y - head_y)
+    torso_ratio = torso_gap / scale
+    neck_ratio = neck_gap / scale
 
-    if torso_dy <= 0.01:
-        # 어깨가 골반 아래에 있으면 비정상 (완전히 엎드린 상태)
-        torso_pitch_deg = 45.0
-    else:
-        # 바로 앉으면 어깨-골반이 순수 수직 → angle≈0
-        # 숙이면 어깨가 앞으로 → 이미지에서 어깨 Y가 올라감 → torso_dy 줄어듦
-        # 이걸 기준 대비 줄어든 비율로 환산.
-        # 하지만 정면에서는 X 편차가 더 신뢰도 높음.
-        # 두 가지를 결합: atan2(dx, dy)
-        torso_angle_rad = math.atan2(abs(torso_dx), torso_dy)
-        torso_pitch_deg = math.degrees(torso_angle_rad)
+    # 사용자별 calibration 없이 쓰기 위한 보수적인 기준이다.
+    torso_compression = max(0.0, min(1.0, (1.35 - torso_ratio) / 0.55))
+    neck_compression = max(0.0, min(1.0, (0.95 - neck_ratio) / 0.45))
+    torso_pitch_deg = torso_compression * 30.0
+    neck_pitch_deg = neck_compression * 25.0
 
-    # --- 목 기울기 (neck pitch) = 머리-어깨 상대각 ---
-    # 고개를 숙이면 머리 Y가 어깨 Y에 가까워짐 (또는 X로 치우침)
-    neck_dy = shoulder_y - head_y   # 양수 (머리가 위)
-    neck_dx = head_x - shoulder_x   # 머리가 어깨 대비 좌우 치우침
-
-    if neck_dy <= 0.01:
-        neck_pitch_deg = 35.0
-    else:
-        # 바로 있으면 머리가 어깨 위에 수직 → angle≈0
-        # 고개를 숙이면 머리 Y가 어깨에 접근 + X로 쏠림
-        neck_angle_rad = math.atan2(abs(neck_dx), neck_dy)
-        neck_pitch_deg = math.degrees(neck_angle_rad)
+    # --- 좌우 기울기 ---
+    # 어깨선·골반선의 기울기와 두 중심의 수평 이격을 함께 본다. 앞으로
+    # 숙여도 양쪽 선이 수평이고 중심이 유지되면 lateral 값은 작게 남는다.
+    shoulder_dx = abs(landmarks[RIGHT_SHOULDER].x
+                     - landmarks[LEFT_SHOULDER].x)
+    shoulder_dy = abs(landmarks[RIGHT_SHOULDER].y
+                     - landmarks[LEFT_SHOULDER].y)
+    hip_dx = abs(landmarks[RIGHT_HIP].x - landmarks[LEFT_HIP].x)
+    hip_dy = abs(landmarks[RIGHT_HIP].y - landmarks[LEFT_HIP].y)
+    # 좌우 반전된 영상에서도 dx의 부호 때문에 180도가 나오지 않도록
+    # 선분의 방향이 아니라 기울기의 크기만 계산한다.
+    shoulder_line = math.degrees(math.atan2(shoulder_dy,
+                                            max(shoulder_dx, 0.02)))
+    hip_line = math.degrees(math.atan2(hip_dy, max(hip_dx, 0.02)))
+    center_offset = abs(shoulder_x - hip_x) / scale
+    center_tilt = math.degrees(math.atan2(center_offset,
+                                          max(torso_gap, 0.02)))
+    lateral_tilt_deg = max(abs(shoulder_line), abs(hip_line), center_tilt)
 
     # 부호 결정: X 양수(오른쪽) 방향으로 치우치면 양수
     # 하지만 우리 로봇은 앞뒤만 있으므로, 부호는 항상 양수(숙인 정도)로 사용
@@ -140,6 +145,9 @@ def extract_angles(world, landmarks, timestamp, min_visibility_threshold=0.5,
         torso_pitch_deg=torso_pitch_deg,
         neck_pitch_deg=neck_pitch_deg,
         confidence=confidence,
+        lateral_tilt_deg=lateral_tilt_deg,
+        torso_compression=torso_compression,
+        neck_compression=neck_compression,
     )
 
 
@@ -152,6 +160,9 @@ def clamp_angles(angles, max_torso_deg, max_neck_deg):
         neck_pitch_deg=max(-max_neck_deg, min(max_neck_deg,
                                               angles.neck_pitch_deg)),
         confidence=angles.confidence,
+        lateral_tilt_deg=angles.lateral_tilt_deg,
+        torso_compression=angles.torso_compression,
+        neck_compression=angles.neck_compression,
     )
 
 
@@ -170,6 +181,12 @@ def smooth(previous, current, alpha, neck_alpha=None):
         neck_pitch_deg=(na * current.neck_pitch_deg
                         + (1 - na) * previous.neck_pitch_deg),
         confidence=current.confidence,
+        lateral_tilt_deg=(alpha * current.lateral_tilt_deg
+                          + (1 - alpha) * previous.lateral_tilt_deg),
+        torso_compression=(alpha * current.torso_compression
+                           + (1 - alpha) * previous.torso_compression),
+        neck_compression=(na * current.neck_compression
+                          + (1 - na) * previous.neck_compression),
     )
 
 
@@ -192,6 +209,9 @@ def apply_reference(angles, reference):
         torso_pitch_deg=angles.torso_pitch_deg - reference.torso_pitch_deg,
         neck_pitch_deg=angles.neck_pitch_deg - reference.neck_pitch_deg,
         confidence=angles.confidence,
+        lateral_tilt_deg=angles.lateral_tilt_deg,
+        torso_compression=angles.torso_compression,
+        neck_compression=angles.neck_compression,
     )
 
 
@@ -204,17 +224,29 @@ class MedianFilter:
         self.window = window
         self._torso = deque(maxlen=window)
         self._neck = deque(maxlen=window)
+        self._lateral = deque(maxlen=window)
+        self._torso_compression = deque(maxlen=window)
+        self._neck_compression = deque(maxlen=window)
 
     def reset(self):
         self._torso.clear()
         self._neck.clear()
+        self._lateral.clear()
+        self._torso_compression.clear()
+        self._neck_compression.clear()
 
     def apply(self, angles):
         self._torso.append(angles.torso_pitch_deg)
         self._neck.append(angles.neck_pitch_deg)
+        self._lateral.append(angles.lateral_tilt_deg)
+        self._torso_compression.append(angles.torso_compression)
+        self._neck_compression.append(angles.neck_compression)
         return PostureAngles(
             timestamp=angles.timestamp,
             torso_pitch_deg=median(self._torso),
             neck_pitch_deg=median(self._neck),
             confidence=angles.confidence,
+            lateral_tilt_deg=median(self._lateral),
+            torso_compression=median(self._torso_compression),
+            neck_compression=median(self._neck_compression),
         )

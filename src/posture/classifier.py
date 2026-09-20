@@ -10,7 +10,8 @@ from typing import Literal
 from src.perception.posture_features import PostureAngles
 
 PostureLabel = Literal[
-    "good", "slouch", "forward_head", "slouch_and_forward", "unknown",
+    "good", "slouch", "forward_head", "slouch_and_forward",
+    "lateral_tilt", "unknown",
 ]
 
 
@@ -24,12 +25,20 @@ class PostureState:
     @property
     def is_bad(self):
         """관측 가능한 나쁜 자세인지 반환한다."""
+        return self.label in {
+            "slouch", "forward_head", "slouch_and_forward", "lateral_tilt",
+        }
+
+    @property
+    def is_triggerable_bad(self):
+        """현재 로봇의 pitch 고정 포즈로 표현할 수 있는 나쁜 자세인지 반환한다."""
         return self.label in {"slouch", "forward_head", "slouch_and_forward"}
 
 
 # 임계값 (도). 이 이상이면 나쁜 자세로 판정.
 TORSO_THRESHOLD_DEG = 12.0
 NECK_THRESHOLD_DEG = 10.0
+LATERAL_THRESHOLD_DEG = 12.0
 
 
 def classify(angles: PostureAngles) -> PostureState:
@@ -49,11 +58,16 @@ def classify(angles: PostureAngles) -> PostureState:
 
     torso_bad = torso > TORSO_THRESHOLD_DEG
     neck_bad = neck > NECK_THRESHOLD_DEG
+    lateral_bad = angles.lateral_tilt_deg > LATERAL_THRESHOLD_DEG
 
     torso_severity = max(0.0, min(1.0, torso / 45.0)) if torso > 0 else 0.0
     neck_severity = max(0.0, min(1.0, neck / 35.0)) if neck > 0 else 0.0
 
-    if torso_bad and neck_bad:
+    # 현재 로봇은 pitch만 표현할 수 있으므로 좌우 기울기는 별도 상태로
+    # 남긴다. 이를 slouch로 바꾸면 정면 웹캠에서 오작동할 때 로봇이 움직인다.
+    if lateral_bad:
+        label = "lateral_tilt"
+    elif torso_bad and neck_bad:
         label = "slouch_and_forward"
     elif torso_bad:
         label = "slouch"

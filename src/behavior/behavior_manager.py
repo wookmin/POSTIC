@@ -67,6 +67,7 @@ class BehaviorManager(threading.Thread):
 
         # 최신 자세를 메인 스레드가 넣고, 판단 스레드가 읽는다.
         self._lock = threading.Lock()
+        self._policy_lock = threading.Lock()
         self._latest_angles: Optional[PostureAngles] = None
         self._latest_posture: Optional[PostureState] = None
 
@@ -104,17 +105,20 @@ class BehaviorManager(threading.Thread):
 
         now = time.monotonic()
 
-        if not should_trigger(self._policy_state, posture, now, self._config):
-            return
-
-        urgency = urgency_level(self._policy_state, self._config)
+        # 이벤트 소비 측에서 정책을 재무장할 수 있으므로 트리거와 강도
+        # 계산을 같은 잠금으로 묶어 상태가 반쯤 갱신되지 않게 한다.
+        with self._policy_lock:
+            if not should_trigger(self._policy_state, posture, now,
+                                  self._config):
+                return
+            urgency = urgency_level(self._policy_state, self._config)
+            last_correction_at = self._policy_state.last_correction_at
         features = {
             "torso_pitch_deg": angles.torso_pitch_deg,
             "neck_pitch_deg": angles.neck_pitch_deg,
             "duration_sec": self._config.sustain_seconds,
-            "since_last_correction": now - self._policy_state.last_correction_at
-                                     if self._policy_state.last_correction_at > 0
-                                     else 999,
+            "since_last_correction": now - last_correction_at
+                                     if last_correction_at > 0 else 999,
         }
 
         if self._use_gemini:
@@ -123,11 +127,13 @@ class BehaviorManager(threading.Thread):
             except Exception as exc:
                 # API 실패 — 조용히 넘긴다. 다음 주기에 다시 시도.
                 print(f"[BehaviorManager] Gemini 호출 실패: {exc}")
+                self.rearm_after_skipped_event()
                 return
         else:
             decision = self._fixed_decision(posture.label)
 
         if decision.action == "ignore":
+            self.rearm_after_skipped_event()
             return
 
         event = CorrectionEvent(
@@ -138,6 +144,26 @@ class BehaviorManager(threading.Thread):
             observed_angles=angles,
         )
         self._events.put(event)
+
+    def rearm_after_skipped_event(self):
+        """실제로 실행되지 않은 이벤트를 다시 감지할 수 있게 한다."""
+        with self._lock:
+            posture = self._latest_posture
+
+        with self._policy_lock:
+            state = self._policy_state
+            state.armed = True
+            state.last_correction_at = -9999.0
+            state.correction_count = max(0, state.correction_count - 1)
+            if posture is not None and posture.is_triggerable_bad:
+                # 지금 자세가 여전히 나쁘더라도 처음부터 지속시간을 다시
+                # 세어, 큐 지연 때문에 즉시 재개입하지 않게 한다.
+                state.bad_since = time.monotonic()
+                state.last_label = posture.label
+            else:
+                state.bad_since = None
+                state.last_label = (posture.label
+                                    if posture is not None else "unknown")
 
     @staticmethod
     def _fixed_decision(posture_label: str) -> GeminiDecision:

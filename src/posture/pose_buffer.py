@@ -87,6 +87,12 @@ class PoseBuffer:
             neck_pitch_deg=_lerp(before.neck_pitch_deg,
                                  after.neck_pitch_deg, ratio),
             confidence=min(before.confidence, after.confidence),
+            lateral_tilt_deg=_lerp(before.lateral_tilt_deg,
+                                   after.lateral_tilt_deg, ratio),
+            torso_compression=_lerp(before.torso_compression,
+                                    after.torso_compression, ratio),
+            neck_compression=_lerp(before.neck_compression,
+                                   after.neck_compression, ratio),
         )
 
 

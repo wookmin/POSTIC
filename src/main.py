@@ -43,7 +43,7 @@ from src.robot.joint_writer import JointWriter, WriterError  # noqa: E402
 from src.behavior.behavior_manager import BehaviorManager
 from src.behavior.executor import BehaviorExecutor  # noqa: E402
 from src.safety.supervisor import (  # noqa: E402
-    STATE_IDLE, STATE_SAFE_STOP, STATE_TRACKING, IdlePolicy,
+    STATE_IDLE, STATE_RETURNING, STATE_SAFE_STOP, STATE_TRACKING, IdlePolicy,
 )
 from src.safety.gate import SafetyGate  # noqa: E402
 from src.safety.health import HealthMonitor, SafeStopRequested  # noqa: E402
@@ -82,6 +82,7 @@ class ControlLoop(threading.Thread):
             motion["return_to_neutral_sec"], motion["idle_release_sec"],
             grace_seconds=motion.get("person_lost_grace_sec", 0.5))
         self.neutral = mapper.neutral_targets()
+        self._rest_targets = dict(self.neutral)
         self.stop_event = threading.Event()
         self.error = None
 
@@ -93,6 +94,9 @@ class ControlLoop(threading.Thread):
         self._behavior_lock = threading.Lock()
         self._behavior_action = None
         self._behavior_started_at = None
+        self._behavior_returning = False
+        self._behavior_return_started_at = None
+        self._behavior_release_sec = motion["idle_release_sec"]
 
     def submit_behavior(self, action):
         """고정된 행동을 다음 제어 tick부터 재생한다."""
@@ -101,6 +105,8 @@ class ControlLoop(threading.Thread):
         with self._behavior_lock:
             self._behavior_action = action
             self._behavior_started_at = time.monotonic()
+            self._behavior_returning = False
+            self._behavior_return_started_at = None
 
     def safe_stop(self, reason):
         """추적을 중지하고 finally의 중립 복귀 경로로 보낸다."""
@@ -109,6 +115,8 @@ class ControlLoop(threading.Thread):
         with self._behavior_lock:
             self._behavior_action = None
             self._behavior_started_at = None
+            self._behavior_returning = False
+            self._behavior_return_started_at = None
         self.stop_event.set()
 
     def _behavior_pose(self, now):
@@ -120,8 +128,60 @@ class ControlLoop(threading.Thread):
             if now - started >= action.duration_sec:
                 self._behavior_action = None
                 self._behavior_started_at = None
+                self._behavior_returning = True
+                self._behavior_return_started_at = now
                 return None
             return action.pose
+
+    def _cancel_behavior(self, now):
+        """사람이 사라지거나 자세가 바뀌면 고정 포즈를 중단하고 복귀한다."""
+        with self._behavior_lock:
+            if self._behavior_action is not None:
+                self._behavior_action = None
+                self._behavior_started_at = None
+                self._behavior_returning = True
+                self._behavior_return_started_at = now
+
+    def _at_neutral(self):
+        return all(
+            abs(self.commanded.get(name, value) - value) <= 15
+            for name, value in self.neutral.items())
+
+    def _posture_trigger_output(self, now, person_visible, state):
+        """반응 모드의 목표와 토크 상태를 계산한다.
+
+        대기 중에는 시작 시점의 기준 자세를 토크로 유지하고, 이벤트가 있을
+        때만 고정 포즈로 이동한다. 이벤트가 끝나면 중립으로 복귀한 뒤 토크를
+        푼다.
+        """
+        behavior_pose = self._behavior_pose(now)
+        if behavior_pose is not None:
+            if person_visible and state == STATE_TRACKING:
+                return self.mapper.to_targets(behavior_pose), True
+            self._cancel_behavior(now)
+
+        with self._behavior_lock:
+            returning = self._behavior_returning
+            started = self._behavior_return_started_at
+
+        if returning:
+            if self._at_neutral():
+                if (started is None
+                        or now - started >= self._behavior_release_sec):
+                    with self._behavior_lock:
+                        self._behavior_returning = False
+                        self._behavior_return_started_at = None
+                    return dict(self.commanded), False
+            return dict(self.neutral), True
+
+        if not person_visible:
+            # 사람이 없으면 기존 IdlePolicy가 중립 복귀와 토크 해제를
+            # 담당한다. 사람이 보이는 동안에는 현재 기준 자세를 유지한다.
+            return dict(self.neutral), state != STATE_IDLE
+
+        # 평상시에는 사용자의 자세를 따라가지 않고 시작 시점의 기준 자세를
+        # 유지한다. 토크를 풀면 세로 컬럼이 자중으로 무너질 수 있다.
+        return dict(self._rest_targets), True
 
     def run(self):
         try:
@@ -134,6 +194,7 @@ class ControlLoop(threading.Thread):
         if self.writer is not None and self.motion_enabled:
             self.writer.prepare()
             self.commanded = self.writer.read_positions() or dict(self.neutral)
+            self._rest_targets = dict(self.commanded)
 
         next_tick = time.monotonic()
         while not self.stop_event.is_set():
@@ -151,19 +212,28 @@ class ControlLoop(threading.Thread):
                                                self.commanded, self.neutral)
             self.state = state
 
-            if (self.motion_enabled and person_visible
-                    and state == STATE_TRACKING):
-                behavior_pose = self._behavior_pose(now)
-                if self.condition == "posture_trigger":
-                    # 정상 상태에는 고정된 중립 목표만 보낸다. 이벤트가
-                    # 있을 때만 predefined pose가 이 목표를 대체한다.
-                    desired = (self.mapper.to_targets(behavior_pose)
-                               if behavior_pose is not None
-                               else dict(self.neutral))
+            if self.condition == "posture_trigger":
+                desired, torque_enabled = self._posture_trigger_output(
+                    now, person_visible, state)
+            elif self.motion_enabled:
+                if state == STATE_TRACKING:
+                    if person_visible:
+                        behavior_pose = self._behavior_pose(now)
+                        desired = self.mapper.to_targets(behavior_pose or played)
+                    else:
+                        # 사람 이탈 grace 동안에는 현재 미러링 자세를
+                        # 유지하고, RETURNING 상태부터 중립으로 복귀한다.
+                        desired = dict(self.commanded)
+                    torque_enabled = True
+                elif state == STATE_RETURNING:
+                    desired = dict(self.neutral)
+                    torque_enabled = True
                 else:
-                    desired = self.mapper.to_targets(behavior_pose or played)
+                    desired = dict(self.neutral)
+                    torque_enabled = False
             else:
                 desired = dict(self.neutral)
+                torque_enabled = False
 
             # 일반 추적, 행동 재생, 중립 복귀 모두 같은 관문을 통과한다.
             limited = self.safety_gate.limit_targets(self.commanded, desired)
@@ -171,7 +241,7 @@ class ControlLoop(threading.Thread):
             self.last_targets = limited
 
             if self.writer is not None and self.motion_enabled:
-                if state == STATE_IDLE:
+                if not torque_enabled:
                     self.writer.set_torque(False)
                 else:
                     self.writer.set_torque(True)
@@ -314,6 +384,9 @@ def run(args):
     behavior = None
     safety_gate = SafetyGate(mapper, config)
     health = HealthMonitor(config)
+    intervention_config = config.get("intervention") or {}
+    max_event_age_sec = float(
+        intervention_config.get("max_event_age_sec", 0.75))
     try:
         executor = BehaviorExecutor(config, safety_gate, condition)
     except ValueError as exc:
@@ -437,20 +510,50 @@ def run(args):
                 if behavior is not None:
                     event = behavior.poll_event()
                     if event:
-                        action = executor.build(event)
-                        if action is not None:
-                            if action.pose is not None:
-                                control.submit_behavior(action)
-                            applied_at = time.monotonic()
-                            if response_tracker is not None:
-                                response_tracker.intervention(
-                                    applied_at, event.posture_label,
-                                    action.behavior)
-                            if speaker is not None and action.speech:
-                                speaker.submit(action.speech, now=applied_at)
+                        action = None
+                        event_now = time.monotonic()
+                        current_posture = classify(observed)
+                        age = event_now - event.timestamp
+                        event_is_current = (
+                            observed.valid
+                            and age >= 0.0
+                            and age <= max_event_age_sec
+                            and current_posture.label == event.posture_label
+                        )
+                        if event_is_current:
+                            action = executor.build(event)
+                            if action is not None:
+                                if action.pose is not None:
+                                    control.submit_behavior(action)
+                                applied_at = time.monotonic()
+                                if response_tracker is not None:
+                                    response_tracker.intervention(
+                                        applied_at, event.posture_label,
+                                        action.behavior)
+                                if speaker is not None and action.speech:
+                                    speaker.submit(action.speech, now=applied_at)
+                            else:
+                                # 실행기가 행동을 만들지 못한 경우도 실제
+                                # 개입이 아니므로 다음 감지를 허용한다.
+                                behavior.rearm_after_skipped_event()
+                        else:
+                            if event_logger is not None:
+                                reason = ("person_lost" if not observed.valid
+                                          else "posture_changed" if
+                                          current_posture.label != event.posture_label
+                                          else "event_expired")
+                                event_logger.record(
+                                    "intervention_skipped",
+                                    timestamp=event_now,
+                                    posture=event.posture_label,
+                                    reason=reason,
+                                    event_age_sec=round(age, 4),
+                                )
+                            behavior.rearm_after_skipped_event()
                         d = event.decision
                         action_name = action.behavior if action else "ignore"
-                        print(f"[교정] [{d.action}] {d.speech} "
+                        prefix = "자세반응" if condition == "posture_trigger" else "교정"
+                        print(f"[{prefix}] [{d.action}] {d.speech} "
                               f"(행동: {action_name}, 강도: {event.urgency})")
 
                 if calibration_deadline is not None:

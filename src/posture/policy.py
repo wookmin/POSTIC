@@ -25,6 +25,7 @@ class PolicyState:
     last_correction_at: float = -9999.0   # 마지막 교정 시각 (초기: 과거로 설정해 첫 트리거 허용)
     correction_count: int = 0             # 연속 교정 횟수 (좋아지면 초기화)
     last_label: str = "good"
+    armed: bool = True                    # 정상 회복 전에는 재트리거하지 않음
 
 
 def should_trigger(state: PolicyState, posture: PostureState,
@@ -42,16 +43,34 @@ def should_trigger(state: PolicyState, posture: PostureState,
         state.last_label = "unknown"
         return False
 
-    is_bad = posture.is_bad
-
-    # 좋은 자세로 돌아왔으면 타이머 초기화
-    if not is_bad:
-        if state.bad_since is not None:
-            state.bad_since = None
+    # 좋은 자세로 돌아왔을 때만 재무장한다. lateral_tilt은 인식은 하되
+    # 현재 pitch-only 로봇이 표현할 고정 포즈가 없으므로 트리거하지 않으며,
+    # 이미 실행된 이벤트를 lateral_tilt만으로 다시 무장시키지 않는다.
+    if posture.label == "good":
+        state.bad_since = None
         # 마지막 교정 후 20초 이상 좋은 자세면 연속 카운트 리셋
         if state.last_correction_at > 0 and now - state.last_correction_at > 20.0:
             state.correction_count = 0
         state.last_label = "good"
+        state.armed = True
+        return False
+
+    if posture.label == "lateral_tilt":
+        state.bad_since = None
+        state.last_label = "lateral_tilt"
+        return False
+
+    is_bad = posture.is_triggerable_bad
+
+    # 현재 분류기에 없는 비트리거 상태는 관측 불가로 취급한다.
+    if not is_bad:
+        state.bad_since = None
+        state.last_label = posture.label
+        return False
+
+    # 한 번 트리거된 뒤 같은 나쁜 자세가 계속되면, 정상 자세로 돌아오기
+    # 전까지는 같은 이벤트를 다시 만들지 않는다.
+    if not state.armed:
         return False
 
     # 나쁜 자세 시작 기록
@@ -74,6 +93,7 @@ def should_trigger(state: PolicyState, posture: PostureState,
     state.correction_count += 1
     state.bad_since = None  # 리셋해서 다음 판단은 새로 시작
     state.last_label = posture.label
+    state.armed = False
     return True
 
 

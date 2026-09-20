@@ -5,6 +5,7 @@ import pytest
 from src.perception.posture_features import PostureAngles
 from src.posture.classifier import classify
 from src.posture.policy import PolicyConfig, PolicyState, should_trigger, urgency_level
+from src.behavior.behavior_manager import BehaviorManager
 from src.behavior.executor import BehaviorExecutor
 
 
@@ -28,6 +29,14 @@ class TestClassifier:
         angles = PostureAngles(1.0, 20.0, 15.0, 1.0)
         state = classify(angles)
         assert state.label == "slouch_and_forward"
+
+    def test_lateral_tilt_does_not_become_slouch_trigger(self):
+        angles = PostureAngles(1.0, 5.0, 3.0, 1.0,
+                               lateral_tilt_deg=20.0)
+        state = classify(angles)
+        assert state.label == "lateral_tilt"
+        assert state.is_bad is True
+        assert state.is_triggerable_bad is False
 
     def test_invalid_angles_are_unknown(self):
         angles = PostureAngles(1.0, 30.0, 20.0, 0.0)  # confidence=0 → invalid
@@ -74,6 +83,24 @@ class TestPolicy:
         for t in range(5, 13):
             assert should_trigger(state, bad, float(t), self.config) is False
 
+        # 쿨다운이 지나도 같은 나쁜 자세 구간에서는 다시 호출하지 않는다.
+        assert should_trigger(state, bad, 20.0, self.config) is False
+        assert state.correction_count == 1
+
+    def test_bad_posture_rearms_only_after_good_posture(self):
+        state = PolicyState()
+        bad = classify(PostureAngles(1.0, 25.0, 3.0, 1.0))
+        good = classify(PostureAngles(1.0, 5.0, 3.0, 1.0))
+        for t in range(4):
+            should_trigger(state, bad, float(t), self.config)
+        assert state.armed is False
+        should_trigger(state, good, 10.0, self.config)
+        assert state.armed is True
+        should_trigger(state, bad, 11.0, self.config)
+        should_trigger(state, bad, 12.0, self.config)
+        should_trigger(state, bad, 13.0, self.config)
+        assert should_trigger(state, bad, 14.0, self.config) is True
+
     def test_good_posture_resets_timer(self):
         state = PolicyState()
         bad = classify(PostureAngles(1.0, 25.0, 3.0, 1.0))
@@ -97,6 +124,30 @@ class TestPolicy:
         assert should_trigger(state, unknown, 10.0, self.config) is False
         assert state.bad_since is None
         assert should_trigger(state, bad, 11.0, self.config) is False
+
+    def test_lateral_tilt_does_not_rearm_after_correction(self):
+        state = PolicyState(armed=False, last_label="slouch")
+        lateral = classify(PostureAngles(1.0, 5.0, 3.0, 1.0,
+                                         lateral_tilt_deg=20.0))
+
+        assert should_trigger(state, lateral, 10.0, self.config) is False
+        assert state.armed is False
+
+    def test_skipped_event_can_be_rearmed(self):
+        manager = BehaviorManager({
+            "experiment": {"condition": "posture_trigger"},
+        })
+        manager._policy_state.armed = False
+        manager._policy_state.last_correction_at = 10.0
+        manager._policy_state.correction_count = 1
+        manager.update_posture(PostureAngles(1.0, 25.0, 3.0, 1.0))
+
+        manager.rearm_after_skipped_event()
+
+        assert manager._policy_state.armed is True
+        assert manager._policy_state.last_correction_at == -9999.0
+        assert manager._policy_state.correction_count == 0
+        assert manager._policy_state.bad_since is not None
 
     def test_urgency_escalates(self):
         state = PolicyState()
