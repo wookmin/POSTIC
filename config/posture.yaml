@@ -81,18 +81,18 @@ experiment:
 # 사용자의 관측 각도를 복사하지 않고, 자세 라벨에 따라 이 값만 호출한다.
 # 실제 모터 목표는 JointMapper와 SafetyGate가 운용 범위 안에서 제한한다.
 intervention:
-  action_duration_sec: 1.0
+  action_duration_sec: 1.5
   max_event_age_sec: 0.75  # 실행 직전 최신 자세와 이벤트 시각을 재확인
   poses:
     slouch:
-      torso_pitch_deg: 8.0
-      neck_pitch_deg: 2.0
+      torso_pitch_deg: 14.0
+      neck_pitch_deg: 4.0
     forward_head:
-      torso_pitch_deg: 2.0
-      neck_pitch_deg: 8.0
+      torso_pitch_deg: 4.0
+      neck_pitch_deg: 14.0
     slouch_and_forward:
-      torso_pitch_deg: 8.0
-      neck_pitch_deg: 8.0
+      torso_pitch_deg: 14.0
+      neck_pitch_deg: 14.0
 
 # TTS는 별도 스레드에서 실행된다. 기본은 로그만 남기는 dry-run이다.
 audio:

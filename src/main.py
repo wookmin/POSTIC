@@ -311,13 +311,16 @@ def print_status_line(now, status_mark, control, measured, played, fps,
     """헤드리스 모드에서 0.5초마다 상태를 한 줄로 찍는다."""
     if now - status_mark < 0.5:
         return status_mark
+    measured_state = classify(measured) if measured else None
     measured_text = (
-        "torso {:+6.1f} neck {:+6.1f}".format(
-            measured.torso_pitch_deg, measured.neck_pitch_deg)
+        "torso {:+5.1f} neck {:+5.1f} shoulder {:+5.1f} {}".format(
+            measured.torso_pitch_deg, measured.neck_pitch_deg,
+            measured.lateral_tilt_deg, measured_state.label)
         if measured else "사람 없음            ")
     played_text = (
-        "torso {:+6.1f} neck {:+6.1f}".format(
-            played.torso_pitch_deg, played.neck_pitch_deg)
+        "torso {:+5.1f} neck {:+5.1f} shoulder {:+5.1f}".format(
+            played.torso_pitch_deg, played.neck_pitch_deg,
+            played.lateral_tilt_deg)
         if played and played.valid else "대기                 ")
     targets = control.last_targets
     played_label = "관측" if condition == "posture_trigger" else "재생"
@@ -338,6 +341,9 @@ def draw_preview(frame, control, measured, played, echo, angles_config,
         ("측정  torso {:+6.1f}  neck {:+6.1f}".format(
             measured.torso_pitch_deg, measured.neck_pitch_deg)
          if measured else "측정  사람을 찾는 중"),
+        ("어깨  lateral {:+6.1f}  상태 {}".format(
+            measured.lateral_tilt_deg, classify(measured).label)
+         if measured else "어깨  측정 대기"),
         (f"{played_label}  torso {played.torso_pitch_deg:+6.1f}  "
          f"neck {played.neck_pitch_deg:+6.1f}"
          if played and played.valid else f"{played_label}  대기"),
