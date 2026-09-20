@@ -39,6 +39,14 @@ class ResponseTracker:
         if active is None:
             return
 
+        # 카메라가 사람을 놓친 구간은 정상 회복이나 재악화로 판단하지
+        # 않는다. 관측이 다시 가능해질 때까지 열린 개입을 유지한다.
+        if posture_label == "unknown":
+            if (active["responded_at"] is None
+                    and now - active["started_at"] >= self.response_timeout_sec):
+                self._finish_ignored(now, "timeout")
+            return
+
         if active["responded_at"] is None:
             if posture_label == "good":
                 active["responded_at"] = now

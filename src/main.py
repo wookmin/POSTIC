@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""카메라로 본 자세를 로봇이 한 템포 늦게 따라한다.
+"""카메라로 본 나쁜 자세에만 미리 정한 동작으로 반응한다.
 
-메인 스레드가 카메라를 읽어 각도를 뽑고 타임스탬프와 함께 버퍼에 넣는다.
-제어 스레드는 고정 주기로 "지금 - 지연" 시점의 값을 버퍼에서 보간해 꺼내
-모터에 쓴다. 인식이 느려져도 재생 템포는 벽시계 기준으로 일정하다.
+정상 자세에서는 로봇을 중립에 두고 움직이지 않는다. 나쁜 자세가 정책에
+정해진 시간 이상 지속될 때만 미리 정의된 고정 포즈를 잠시 실행한다.
+기존 지연 미러링 모드는 호환을 위해 남아 있지만 기본 모드는 아니다.
 
 기본은 모터를 건드리지 않는다. 실제로 움직이려면 --move 를 붙인다.
 
@@ -61,17 +61,17 @@ def load_posture_config(path=POSTURE_CONFIG):
 
 
 class ControlLoop(threading.Thread):
-    """고정 주기로 버퍼를 재생해 모터에 쓰는 스레드."""
+    """고정 주기로 중립 또는 고정 개입 포즈를 모터에 쓰는 스레드."""
 
     def __init__(self, buffer, mapper, writer, config, safety_gate=None,
-                 condition="mirror"):
+                 condition="posture_trigger"):
         super().__init__(name="control", daemon=True)
         echo = config["echo"]
         motion = config["motion"]
         self.buffer = buffer
         self.mapper = mapper
         self.condition = condition
-        self.motion_enabled = condition == "mirror"
+        self.motion_enabled = condition in {"mirror", "posture_trigger"}
         # 조건이 음성이면 실수로 writer가 전달되어도 이 루프는 하드웨어
         # 초기화·토크·목표 쓰기를 수행하지 않는다.
         self.writer = writer
@@ -139,7 +139,12 @@ class ControlLoop(threading.Thread):
         while not self.stop_event.is_set():
             now = time.monotonic()
             self.heartbeat_at = now
-            played = self.buffer.sample(now - self.delay)
+            if self.condition == "posture_trigger":
+                # 반응 모드는 지연된 샘플이 아니라 최신 관측값으로 사람의
+                # 존재만 확인한다. 실제 동작은 고정 포즈 이벤트만 사용한다.
+                played = self.buffer.latest()
+            else:
+                played = self.buffer.sample(now - self.delay)
             person_visible = played is not None and played.valid
 
             state, torque = self.policy.update(now, person_visible,
@@ -149,7 +154,14 @@ class ControlLoop(threading.Thread):
             if (self.motion_enabled and person_visible
                     and state == STATE_TRACKING):
                 behavior_pose = self._behavior_pose(now)
-                desired = self.mapper.to_targets(behavior_pose or played)
+                if self.condition == "posture_trigger":
+                    # 정상 상태에는 고정된 중립 목표만 보낸다. 이벤트가
+                    # 있을 때만 predefined pose가 이 목표를 대체한다.
+                    desired = (self.mapper.to_targets(behavior_pose)
+                               if behavior_pose is not None
+                               else dict(self.neutral))
+                else:
+                    desired = self.mapper.to_targets(behavior_pose or played)
             else:
                 desired = dict(self.neutral)
 
@@ -214,7 +226,8 @@ def check_pose_within_limits(writer, mapper):
                        + "\n손으로 컬럼을 세운 뒤 다시 실행하세요.")
 
 
-def print_status_line(now, status_mark, control, measured, played, fps):
+def print_status_line(now, status_mark, control, measured, played, fps,
+                      condition="mirror"):
     """헤드리스 모드에서 0.5초마다 상태를 한 줄로 찍는다."""
     if now - status_mark < 0.5:
         return status_mark
@@ -227,25 +240,27 @@ def print_status_line(now, status_mark, control, measured, played, fps):
             played.torso_pitch_deg, played.neck_pitch_deg)
         if played and played.valid else "대기                 ")
     targets = control.last_targets
+    played_label = "관측" if condition == "posture_trigger" else "재생"
     print(f"[{control.state:<9}] fps {fps:4.1f} | "
-          f"측정 {measured_text} | 재생 {played_text} | "
+          f"측정 {measured_text} | {played_label} {played_text} | "
           f"목표 {targets}", flush=True)
     return now
 
 
 def draw_preview(frame, control, measured, played, echo, angles_config,
-                 landmarks, writer, fps):
+                 landmarks, writer, fps, condition="mirror"):
     """프리뷰 창에 스켈레톤과 오버레이를 그린다."""
     draw_skeleton(frame, landmarks)
+    played_label = "관측" if condition == "posture_trigger" else "재생"
     lines = [
         f"state {control.state}   fps {fps:4.1f}   "
         f"delay {echo['delay_sec']:.1f}s",
         ("측정  torso {:+6.1f}  neck {:+6.1f}".format(
             measured.torso_pitch_deg, measured.neck_pitch_deg)
          if measured else "측정  사람을 찾는 중"),
-        ("재생  torso {:+6.1f}  neck {:+6.1f}".format(
-            played.torso_pitch_deg, played.neck_pitch_deg)
-         if played and played.valid else "재생  대기"),
+        (f"{played_label}  torso {played.torso_pitch_deg:+6.1f}  "
+         f"neck {played.neck_pitch_deg:+6.1f}"
+         if played and played.valid else f"{played_label}  대기"),
         "모터  " + ("구동" if writer else "dry-run"),
     ]
     draw_overlay(frame, lines)
@@ -274,20 +289,16 @@ def run(args):
 
     buffer = PoseBuffer(echo["buffer_seconds"])
     median = MedianFilter(angles_config["median_window"])
-    reference = load_reference()
+    # 자세 반응 모드는 사용자별 정상 자세를 학습하지 않는다. 저장된 기준값은
+    # 명시적으로 켠 경우에만 사용해 오래된 calibration이 몰래 적용되지 않게 한다.
+    reference = (load_reference()
+                 if perception.get("use_saved_reference", False) else None)
 
     experiment = config.get("experiment") or {}
-    condition = args.condition or experiment.get("condition", "mirror")
+    condition = args.condition or experiment.get("condition", "posture_trigger")
     if args.move and condition == "voice":
         sys.exit("voice 조건에서는 모터를 구동할 수 없습니다. "
                  "--move 를 빼고 실행하세요.")
-
-    if args.move and reference is None:
-        sys.exit(
-            "캘리브레이션이 없습니다. 정면 카메라에서는 골반을 추정으로 채우기\n"
-            "때문에 사람과 자리마다 상체각에 일정한 치우침이 생깁니다. 그대로\n"
-            "구동하면 로봇이 굽은 자세를 중립으로 착각합니다.\n"
-            "  ~/dynamixel-venv/bin/python -m src.main --calibrate")
 
     calibration_samples = []
     calibration_deadline = None
@@ -338,10 +349,15 @@ def run(args):
         # 교정 판단 스레드 (--no-correction 이면 비활성)
         behavior = None
         if not args.no_correction and not args.calibrate:
-            behavior = BehaviorManager(config)
+            behavior = BehaviorManager(config, condition=condition)
             behavior.start()
-            print(f"교정 모드 활성. 조건={condition}, Gemini 가 자세를 판단합니다 "
-                  "(--no-correction 으로 끌 수 있음).")
+            if condition == "posture_trigger":
+                print(f"자세 반응 모드 활성. 조건={condition}, "
+                      "나쁜 자세가 지속될 때만 고정 모션을 실행합니다 "
+                      "(--no-correction 으로 끌 수 있음).")
+            else:
+                print(f"교정 모드 활성. 조건={condition}, Gemini 가 자세를 판단합니다 "
+                      "(--no-correction 으로 끌 수 있음).")
 
         source = args.camera or perception.get("camera",
                                                perception.get("camera_index", 0))
@@ -355,10 +371,10 @@ def run(args):
                 print("측정 중, 움직이지 마세요...")
                 calibration_deadline = time.monotonic() + 3.0
             else:
-                print("자세 모방 시작. 프리뷰 창에서 q 또는 Esc 로 종료합니다.")
+                print("자세 반응 시작. 프리뷰 창에서 q 또는 Esc 로 종료합니다.")
                 if reference is None:
-                    print("경고: 캘리브레이션 없음. 각도에 치우침이 남습니다 "
-                          "(--calibrate 로 보정).")
+                    print("사용자별 캘리브레이션 없이 실행합니다. "
+                          "카메라 위치를 고정하고 오검출을 확인하세요.")
             if writer is None:
                 print("dry-run 입니다. 모터는 움직이지 않습니다 (--move 로 구동).")
 
@@ -408,11 +424,14 @@ def run(args):
                     median.reset()
                     buffer.push(PostureAngles(now, 0.0, 0.0, 0.0))
 
-                # 교정 판단 스레드에 최신 자세 전달
-                if behavior is not None and measured is not None:
-                    behavior.update_posture(measured)
-                if response_tracker is not None and measured is not None:
-                    response_tracker.update(now, classify(measured).label)
+                # 교정 판단 스레드에는 인식 실패도 unknown으로 전달한다.
+                # 실패 프레임을 생략하면 이전 나쁜 자세가 보이지 않은
+                # 시간까지 지속된 것으로 오인할 수 있다.
+                observed = measured or PostureAngles(now, 0.0, 0.0, 0.0)
+                if behavior is not None:
+                    behavior.update_posture(observed)
+                if response_tracker is not None:
+                    response_tracker.update(now, classify(observed).label)
 
                 # 교정 이벤트 소비
                 if behavior is not None:
@@ -427,7 +446,7 @@ def run(args):
                                 response_tracker.intervention(
                                     applied_at, event.posture_label,
                                     action.behavior)
-                            if speaker is not None:
+                            if speaker is not None and action.speech:
                                 speaker.submit(action.speech, now=applied_at)
                         d = event.decision
                         action_name = action.behavior if action else "ignore"
@@ -456,14 +475,17 @@ def run(args):
                     frames = 0
                     fps_mark = now
 
-                played = buffer.sample(now - echo["delay_sec"])
+                played = (measured if condition == "posture_trigger"
+                          else buffer.sample(now - echo["delay_sec"]))
 
                 if args.no_preview:
                     status_mark = print_status_line(
-                        now, status_mark, control, measured, played, fps)
+                        now, status_mark, control, measured, played, fps,
+                        condition)
                 else:
                     draw_preview(frame, control, measured, played, echo,
-                                 angles_config, landmarks, writer, fps)
+                                 angles_config, landmarks, writer, fps,
+                                 condition)
                     cv2.imshow("Posture Robot", frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key in (ord("q"), 27):
@@ -524,7 +546,7 @@ def run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="자세 모방 루프")
+    parser = argparse.ArgumentParser(description="자세 반응 로봇 루프")
     parser.add_argument("--move", action="store_true",
                         help="실제로 모터를 구동한다. 없으면 프리뷰만")
     parser.add_argument("--calibrate", action="store_true",
@@ -537,9 +559,9 @@ def main():
     parser.add_argument("--no-preview", action="store_true",
                         help="창을 띄우지 않는다 (헤드리스)")
     parser.add_argument("--no-correction", action="store_true",
-                        help="Gemini 교정 판단을 끈다 (에코만)")
+                        help="자세 반응/교정 판단을 끈다")
     parser.add_argument("--condition",
-                        choices=("voice", "mirror"),
+                        choices=("posture_trigger", "voice", "mirror"),
                         help="실험 개입 조건. 생략하면 config/posture.yaml 사용")
     return run(parser.parse_args())
 

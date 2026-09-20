@@ -8,17 +8,16 @@ echo:
   buffer_seconds: 6.0     # 링 버퍼 길이. delay 보다 넉넉해야 한다
 
 perception:
-  # Intel RealSense SR300 의 RGB 스트림. 인덱스 대신 경로로 고정한다.
-  # USB 포트나 부팅 순서에 따라 /dev/videoN 의 번호가 바뀔 수 있는데,
-  # 이 장치는 video2~video5 를 쓰고 그중 video2 가 컬러다.
-  # 내장 720p 카메라를 쓰려면 /dev/video0 으로 바꾼다.
-  camera: /dev/video2
-  # lite / full / heavy. 무거울수록 랜드마크와 특히 깊이 추정이
-  # 정확하지만 프레임당 추론 시간이 늘어난다.
-  model: heavy            # 깊이 추정 정확도 우선. FPS ~15 로 떨어지지만 충분
+  # 노트북 내장 카메라를 사용한다. 장치 번호가 다른 환경에서는
+  # --camera 인자로 덮어쓴다.
+  camera: /dev/video0
+  # 현재 레포에 포함된 lite 모델로 시작한다. full/heavy는 모델 파일을
+  # 추가한 뒤 FPS와 오검출을 비교해 선택한다.
+  model: lite
   width: 640
   height: 480
   min_visibility: 0.5     # 이 아래면 사람을 못 본 것으로 친다
+  use_saved_reference: false  # 자세 반응 MVP는 사용자별 캘리브레이션을 쓰지 않음
   # 정면 카메라를 가정한다. 시상면 각은 world landmark 의 z(깊이)로 잡는데,
   # 단일 RGB 카메라에서 z 는 가장 노이즈가 큰 축이다. 흔들리면 카메라를
   # 측면에 두는 편이 훨씬 안정적이다.
@@ -71,12 +70,28 @@ safety:
     camera_timeout_sec: 2.0
     control_timeout_sec: 1.0
 
-# 사용자 실험 조건. 바퀴 이동은 파일럿에서 필요성이 확인될 때까지 제외한다.
+# 사용자 실험 조건. 정상 자세에서는 로봇이 중립을 유지하고 움직이지 않는다.
 experiment:
-  condition: mirror           # voice | mirror
+  condition: posture_trigger  # posture_trigger | voice | mirror(legacy)
   action_duration_sec: 1.0
   response_timeout_sec: 15.0
   log_dir: data/runs
+
+# posture_trigger에서만 사용하는 고정 개입 포즈.
+# 사용자의 관측 각도를 복사하지 않고, 자세 라벨에 따라 이 값만 호출한다.
+# 실제 모터 목표는 JointMapper와 SafetyGate가 운용 범위 안에서 제한한다.
+intervention:
+  action_duration_sec: 1.0
+  poses:
+    slouch:
+      torso_pitch_deg: 8.0
+      neck_pitch_deg: 2.0
+    forward_head:
+      torso_pitch_deg: 2.0
+      neck_pitch_deg: 8.0
+    slouch_and_forward:
+      torso_pitch_deg: 8.0
+      neck_pitch_deg: 8.0
 
 # TTS는 별도 스레드에서 실행된다. 기본은 로그만 남기는 dry-run이다.
 audio:

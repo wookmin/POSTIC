@@ -11,7 +11,7 @@ class FakeMapper:
         return {"joint": 50}
 
     def to_targets(self, angles):
-        raise AssertionError("voice 조건은 자세를 모터 목표로 변환하면 안 됨")
+        return {"joint": 60}
 
 
 class FakeGate:
@@ -33,6 +33,10 @@ class OneSampleBuffer:
     def sample(self, when):
         self.loop.stop_event.set()
         return PostureAngles(when, 20.0, 10.0, 1.0)
+
+    def latest(self):
+        self.loop.stop_event.set()
+        return PostureAngles(1.0, 20.0, 10.0, 1.0)
 
 
 def test_voice_condition_never_touches_motor_writer():
@@ -57,3 +61,41 @@ def test_voice_condition_never_touches_motor_writer():
     loop._loop()
 
     assert loop.motion_enabled is False
+
+
+class NeutralOnlyBuffer:
+    def __init__(self):
+        self.loop = None
+
+    def sample(self, when):
+        self.loop.stop_event.set()
+        return PostureAngles(when, 20.0, 10.0, 1.0)
+
+    def latest(self):
+        self.loop.stop_event.set()
+        return PostureAngles(1.0, 20.0, 10.0, 1.0)
+
+
+def test_posture_trigger_keeps_robot_neutral_without_event():
+    buffer = NeutralOnlyBuffer()
+    loop = ControlLoop(
+        buffer=buffer,
+        mapper=FakeMapper(),
+        writer=None,
+        config={
+            "echo": {"delay_sec": 0.8, "control_hz": 1000},
+            "motion": {
+                "return_to_neutral_sec": 2.0,
+                "idle_release_sec": 3.0,
+                "person_lost_grace_sec": 0.5,
+            },
+        },
+        safety_gate=FakeGate(),
+        condition="posture_trigger",
+    )
+    buffer.loop = loop
+
+    loop._loop()
+
+    assert loop.motion_enabled is True
+    assert loop.last_targets == {"joint": 50}

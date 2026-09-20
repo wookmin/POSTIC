@@ -5,8 +5,7 @@
 짧게 자세가 나빠졌다 바로 돌아오면 무시한다.
 """
 
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from src.posture.classifier import PostureState
 
@@ -32,10 +31,18 @@ def should_trigger(state: PolicyState, posture: PostureState,
                    now: float, config: PolicyConfig) -> bool:
     """Gemini 교정을 트리거해야 하는지 판단한다.
 
-    True 를 반환하면 호출자가 Gemini 를 불러야 한다.
+    True 를 반환하면 호출자가 고정 개입 이벤트를 만들거나, 호환 모드에서
+    Gemini를 호출한다.
     상태를 직접 갱신하므로 매 프레임 한 번만 호출해야 한다.
     """
-    is_bad = posture.label != "good"
+    # unknown은 나쁜 자세가 아니다. 관측 불가 구간을 지속시간에 포함하지
+    # 않기 위해 타이머를 끊고, 다시 보인 시점부터 새로 측정한다.
+    if posture.label == "unknown":
+        state.bad_since = None
+        state.last_label = "unknown"
+        return False
+
+    is_bad = posture.is_bad
 
     # 좋은 자세로 돌아왔으면 타이머 초기화
     if not is_bad:

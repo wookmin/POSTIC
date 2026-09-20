@@ -9,7 +9,9 @@ from typing import Literal
 
 from src.perception.posture_features import PostureAngles
 
-PostureLabel = Literal["good", "slouch", "forward_head", "slouch_and_forward"]
+PostureLabel = Literal[
+    "good", "slouch", "forward_head", "slouch_and_forward", "unknown",
+]
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,11 @@ class PostureState:
     label: PostureLabel
     torso_severity: float  # 0.0~1.0, 임계값 대비 비율
     neck_severity: float
+
+    @property
+    def is_bad(self):
+        """관측 가능한 나쁜 자세인지 반환한다."""
+        return self.label in {"slouch", "forward_head", "slouch_and_forward"}
 
 
 # 임계값 (도). 이 이상이면 나쁜 자세로 판정.
@@ -31,7 +38,11 @@ def classify(angles: PostureAngles) -> PostureState:
     양수가 앞으로 숙인 방향이므로, 임계값보다 크면 나쁜 자세.
     """
     if not angles.valid:
-        return PostureState(label="good", torso_severity=0.0, neck_severity=0.0)
+        # 사람을 놓친 프레임을 정상 자세로 취급하면 나쁜 자세 타이머가
+        # 잘못 초기화되거나, 반대로 관측되지 않은 시간이 지속시간에
+        # 포함될 수 있다. 정상/나쁨과 별개의 관측 불가 상태로 전파한다.
+        return PostureState(label="unknown", torso_severity=0.0,
+                            neck_severity=0.0)
 
     torso = angles.torso_pitch_deg
     neck = angles.neck_pitch_deg

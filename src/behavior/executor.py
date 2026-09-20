@@ -1,7 +1,9 @@
-"""LLM 행동 이름을 고정된 모션 명령으로 변환한다.
+"""자세 이벤트를 고정된 모션 명령으로 변환한다.
 
 Gemini가 직접 모터 각도나 속도를 생성하지 않도록, 실행 가능한 행동은
-코드/설정에 미리 선언한다. 변환 결과도 SafetyGate를 통과해야 한다.
+코드/설정에 미리 선언한다. 자세 반응 모드에서는 관측 각도를 복사하지 않고
+자세 라벨에 대응하는 고정 포즈만 호출한다. 변환 결과도 SafetyGate를
+통과해야 한다.
 """
 
 from __future__ import annotations
@@ -25,16 +27,37 @@ class BehaviorExecutor:
     """실험 조건에 맞는 행동을 안전한 high-level 명령으로 변환한다."""
 
     CONDITIONS = frozenset({
-        "voice", "mirror",
+        "voice", "mirror", "posture_trigger",
     })
 
     def __init__(self, config: dict, safety_gate, condition=None):
         self.safety_gate = safety_gate
         experiment = config.get("experiment") or {}
-        self.condition = condition or experiment.get("condition", "mirror")
+        self.condition = condition or experiment.get("condition",
+                                                     "posture_trigger")
         if self.condition not in self.CONDITIONS:
             raise ValueError(f"지원하지 않는 개입 조건: {self.condition}")
-        self.duration_sec = float(experiment.get("action_duration_sec", 1.0))
+        intervention = config.get("intervention") or {}
+        self.duration_sec = float(
+            intervention.get("action_duration_sec",
+                            experiment.get("action_duration_sec", 1.0)))
+        self.fixed_poses = {
+            "slouch": {"torso_pitch_deg": 8.0, "neck_pitch_deg": 2.0},
+            "forward_head": {"torso_pitch_deg": 2.0, "neck_pitch_deg": 8.0},
+            "slouch_and_forward": {
+                "torso_pitch_deg": 8.0, "neck_pitch_deg": 8.0,
+            },
+        }
+        for label, values in (intervention.get("poses") or {}).items():
+            if label in self.fixed_poses:
+                self.fixed_poses[label] = {
+                    "torso_pitch_deg": float(
+                        values.get("torso_pitch_deg",
+                                  self.fixed_poses[label]["torso_pitch_deg"])),
+                    "neck_pitch_deg": float(
+                        values.get("neck_pitch_deg",
+                                  self.fixed_poses[label]["neck_pitch_deg"])),
+                }
 
     def build(self, event):
         """CorrectionEvent를 실행 가능한 BehaviorAction으로 만든다."""
@@ -50,6 +73,32 @@ class BehaviorExecutor:
                 pose=None,
                 duration_sec=self.safety_gate.clamp_duration(self.duration_sec),
                 speech=decision.speech,
+            )
+
+        if self.condition == "posture_trigger":
+            posture_label = getattr(event, "posture_label", None)
+            if posture_label is None:
+                # 오래된 테스트/이벤트와의 호환. 새 이벤트는 반드시
+                # posture_label을 전달한다.
+                posture_label = {
+                    "mimic_slouch": "slouch",
+                    "mimic_forward_head": "forward_head",
+                }.get(decision.behavior)
+            values = self.fixed_poses.get(posture_label)
+            if values is None:
+                return None
+            pose = PostureAngles(
+                timestamp=time.monotonic(),
+                torso_pitch_deg=values["torso_pitch_deg"],
+                neck_pitch_deg=values["neck_pitch_deg"],
+                confidence=1.0,
+            )
+            return BehaviorAction(
+                behavior=posture_label,
+                pose=self.safety_gate.clamp_pose(pose),
+                duration_sec=self.safety_gate.clamp_duration(self.duration_sec),
+                # 현재 프로토타입은 음성 장치 없이 모션만 검증한다.
+                speech="",
             )
 
         if self.condition == "mirror":

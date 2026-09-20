@@ -29,10 +29,11 @@ class TestClassifier:
         state = classify(angles)
         assert state.label == "slouch_and_forward"
 
-    def test_invalid_angles_are_good(self):
+    def test_invalid_angles_are_unknown(self):
         angles = PostureAngles(1.0, 30.0, 20.0, 0.0)  # confidence=0 → invalid
         state = classify(angles)
-        assert state.label == "good"
+        assert state.label == "unknown"
+        assert state.is_bad is False
 
     def test_severity_scales(self):
         mild = classify(PostureAngles(1.0, 15.0, 0.0, 1.0))
@@ -87,6 +88,16 @@ class TestPolicy:
         should_trigger(state, bad, 5.0, self.config)
         assert should_trigger(state, bad, 6.0, self.config) is True
 
+    def test_unknown_does_not_count_as_bad_or_good(self):
+        state = PolicyState()
+        bad = classify(PostureAngles(1.0, 25.0, 3.0, 1.0))
+        unknown = classify(PostureAngles(1.0, 25.0, 3.0, 0.0))
+        should_trigger(state, bad, 0.0, self.config)
+        should_trigger(state, bad, 1.0, self.config)
+        assert should_trigger(state, unknown, 10.0, self.config) is False
+        assert state.bad_since is None
+        assert should_trigger(state, bad, 11.0, self.config) is False
+
     def test_urgency_escalates(self):
         state = PolicyState()
         state.correction_count = 1
@@ -107,7 +118,7 @@ class FakeGate:
 
 class TestBehaviorExecutor:
     def event(self, action="gentle_remind", behavior="mimic_slouch",
-              angles=None):
+              angles=None, posture_label="slouch"):
         decision = type("Decision", (), {
             "action": action,
             "behavior": behavior,
@@ -116,10 +127,12 @@ class TestBehaviorExecutor:
         return type("Event", (), {
             "decision": decision,
             "observed_angles": angles,
+            "posture_label": posture_label,
         })()
 
     def test_mirror_without_observation_does_not_guess_pose(self):
-        executor = BehaviorExecutor({}, FakeGate())
+        executor = BehaviorExecutor(
+            {"experiment": {"condition": "mirror"}}, FakeGate())
         action = executor.build(self.event())
         assert action.behavior == "mirror"
         assert action.pose is None
@@ -137,6 +150,33 @@ class TestBehaviorExecutor:
         assert action.pose.torso_pitch_deg == 21.0
         assert action.pose.neck_pitch_deg == 13.0
         assert action.speech == ""
+
+    def test_posture_trigger_uses_fixed_pose_not_observed_posture(self):
+        observed = PostureAngles(1.0, 21.0, 13.0, 1.0)
+        executor = BehaviorExecutor({
+            "experiment": {"condition": "posture_trigger"},
+            "intervention": {
+                "action_duration_sec": 1.0,
+                "poses": {
+                    "slouch": {
+                        "torso_pitch_deg": 8.0,
+                        "neck_pitch_deg": 2.0,
+                    },
+                },
+            },
+        }, FakeGate())
+        action = executor.build(self.event(angles=observed,
+                                           posture_label="slouch"))
+        assert action.behavior == "slouch"
+        assert action.pose.torso_pitch_deg == 8.0
+        assert action.pose.neck_pitch_deg == 2.0
+        assert action.pose.torso_pitch_deg != observed.torso_pitch_deg
+        assert action.speech == ""
+
+    def test_posture_trigger_ignores_unknown_label(self):
+        executor = BehaviorExecutor(
+            {"experiment": {"condition": "posture_trigger"}}, FakeGate())
+        assert executor.build(self.event(posture_label="unknown")) is None
 
     def test_voice_condition_has_no_motion_override(self):
         executor = BehaviorExecutor({"experiment": {"condition": "voice"}},
