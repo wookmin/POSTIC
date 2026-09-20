@@ -11,6 +11,7 @@ TICKS_PER_DEG = 4096 / 360.0
 STATE_TRACKING = "tracking"
 STATE_RETURNING = "returning"
 STATE_IDLE = "idle"
+STATE_SAFE_STOP = "safe_stop"
 
 
 @dataclass

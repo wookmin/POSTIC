@@ -33,6 +33,7 @@ from src.perception.posture_features import (  # noqa: E402
     smooth,
 )
 from src.posture.pose_buffer import PoseBuffer  # noqa: E402
+from src.posture.classifier import classify  # noqa: E402
 from src.robot.dynamixel_driver import (  # noqa: E402
     BusError, PROJECT_ROOT, describe_hardware_error, install_signal_guards,
     load_joints, open_bus, ping_all, read_hardware_error,
@@ -40,9 +41,15 @@ from src.robot.dynamixel_driver import (  # noqa: E402
 from src.robot.joint_mapper import JointMapper, MappingError  # noqa: E402
 from src.robot.joint_writer import JointWriter, WriterError  # noqa: E402
 from src.behavior.behavior_manager import BehaviorManager
+from src.behavior.executor import BehaviorExecutor  # noqa: E402
 from src.safety.supervisor import (  # noqa: E402
-    STATE_IDLE, IdlePolicy, SlewLimiter, max_step_ticks,
+    STATE_IDLE, STATE_SAFE_STOP, STATE_TRACKING, IdlePolicy,
 )
+from src.safety.gate import SafetyGate  # noqa: E402
+from src.safety.health import HealthMonitor, SafeStopRequested  # noqa: E402
+from src.audio.tts import SpeechQueue  # noqa: E402
+from src.telemetry.event_log import EventLogger  # noqa: E402
+from src.telemetry.response_tracker import ResponseTracker  # noqa: E402
 
 POSTURE_CONFIG = PROJECT_ROOT / "config" / "posture.yaml"
 
@@ -56,16 +63,21 @@ def load_posture_config(path=POSTURE_CONFIG):
 class ControlLoop(threading.Thread):
     """고정 주기로 버퍼를 재생해 모터에 쓰는 스레드."""
 
-    def __init__(self, buffer, mapper, writer, config):
+    def __init__(self, buffer, mapper, writer, config, safety_gate=None,
+                 condition="mirror"):
         super().__init__(name="control", daemon=True)
         echo = config["echo"]
         motion = config["motion"]
         self.buffer = buffer
         self.mapper = mapper
+        self.condition = condition
+        self.motion_enabled = condition == "mirror"
+        # 조건이 음성이면 실수로 writer가 전달되어도 이 루프는 하드웨어
+        # 초기화·토크·목표 쓰기를 수행하지 않는다.
         self.writer = writer
         self.delay = echo["delay_sec"]
         self.period = 1.0 / echo["control_hz"]
-        self.limiter = SlewLimiter(max_step_ticks(motion["max_step_deg"]))
+        self.safety_gate = safety_gate or SafetyGate(mapper, config)
         self.policy = IdlePolicy(
             motion["return_to_neutral_sec"], motion["idle_release_sec"],
             grace_seconds=motion.get("person_lost_grace_sec", 0.5))
@@ -76,39 +88,77 @@ class ControlLoop(threading.Thread):
         self.state = "starting"
         self.commanded = dict(self.neutral)
         self.last_targets = dict(self.neutral)
+        self.heartbeat_at = time.monotonic()
+        self.safe_stop_reason = None
+        self._behavior_lock = threading.Lock()
+        self._behavior_action = None
+        self._behavior_started_at = None
+
+    def submit_behavior(self, action):
+        """고정된 행동을 다음 제어 tick부터 재생한다."""
+        if action is None:
+            return
+        with self._behavior_lock:
+            self._behavior_action = action
+            self._behavior_started_at = time.monotonic()
+
+    def safe_stop(self, reason):
+        """추적을 중지하고 finally의 중립 복귀 경로로 보낸다."""
+        self.safe_stop_reason = str(reason)
+        self.state = STATE_SAFE_STOP
+        with self._behavior_lock:
+            self._behavior_action = None
+            self._behavior_started_at = None
+        self.stop_event.set()
+
+    def _behavior_pose(self, now):
+        with self._behavior_lock:
+            action = self._behavior_action
+            started = self._behavior_started_at
+            if action is None or started is None:
+                return None
+            if now - started >= action.duration_sec:
+                self._behavior_action = None
+                self._behavior_started_at = None
+                return None
+            return action.pose
 
     def run(self):
         try:
             self._loop()
         except Exception as exc:                      # 스레드 밖으로 전달
             self.error = exc
-            self.stop_event.set()
+            self.safe_stop(f"control_error: {exc}")
 
     def _loop(self):
-        if self.writer is not None:
+        if self.writer is not None and self.motion_enabled:
             self.writer.prepare()
             self.commanded = self.writer.read_positions() or dict(self.neutral)
 
         next_tick = time.monotonic()
         while not self.stop_event.is_set():
             now = time.monotonic()
+            self.heartbeat_at = now
             played = self.buffer.sample(now - self.delay)
             person_visible = played is not None and played.valid
-
-            if person_visible:
-                desired = self.mapper.to_targets(played)
-            else:
-                desired = dict(self.neutral)
 
             state, torque = self.policy.update(now, person_visible,
                                                self.commanded, self.neutral)
             self.state = state
 
-            limited = self.limiter.apply(self.commanded, desired)
+            if (self.motion_enabled and person_visible
+                    and state == STATE_TRACKING):
+                behavior_pose = self._behavior_pose(now)
+                desired = self.mapper.to_targets(behavior_pose or played)
+            else:
+                desired = dict(self.neutral)
+
+            # 일반 추적, 행동 재생, 중립 복귀 모두 같은 관문을 통과한다.
+            limited = self.safety_gate.limit_targets(self.commanded, desired)
             self.commanded = limited
             self.last_targets = limited
 
-            if self.writer is not None:
+            if self.writer is not None and self.motion_enabled:
                 if state == STATE_IDLE:
                     self.writer.set_torque(False)
                 else:
@@ -226,6 +276,12 @@ def run(args):
     median = MedianFilter(angles_config["median_window"])
     reference = load_reference()
 
+    experiment = config.get("experiment") or {}
+    condition = args.condition or experiment.get("condition", "mirror")
+    if args.move and condition == "voice":
+        sys.exit("voice 조건에서는 모터를 구동할 수 없습니다. "
+                 "--move 를 빼고 실행하세요.")
+
     if args.move and reference is None:
         sys.exit(
             "캘리브레이션이 없습니다. 정면 카메라에서는 골반을 추정으로 채우기\n"
@@ -245,6 +301,29 @@ def run(args):
     status_mark = 0.0
 
     behavior = None
+    safety_gate = SafetyGate(mapper, config)
+    health = HealthMonitor(config)
+    try:
+        executor = BehaviorExecutor(config, safety_gate, condition)
+    except ValueError as exc:
+        sys.exit(str(exc))
+
+    event_logger = None
+    response_tracker = None
+    speaker = None
+    if not args.calibrate:
+        log_dir = Path(experiment.get("log_dir", "data/runs"))
+        if not log_dir.is_absolute():
+            log_dir = PROJECT_ROOT / log_dir
+        event_logger = EventLogger(log_dir, condition=condition)
+        response_tracker = ResponseTracker(
+            event_logger,
+            response_timeout_sec=float(
+                experiment.get("response_timeout_sec", 15.0)),
+        )
+        audio = config.get("audio") or {}
+        speaker = SpeechQueue(audio.get("tts") or {})
+        speaker.start()
     stack = ExitStack()
     try:
         if args.move:
@@ -252,7 +331,8 @@ def run(args):
             writer = build_writer((packet, port), mapper, config)
             check_pose_within_limits(writer, mapper)
 
-        control = ControlLoop(buffer, mapper, writer, config)
+        control = ControlLoop(buffer, mapper, writer, config, safety_gate,
+                              condition=condition)
         control.start()
 
         # 교정 판단 스레드 (--no-correction 이면 비활성)
@@ -260,7 +340,7 @@ def run(args):
         if not args.no_correction and not args.calibrate:
             behavior = BehaviorManager(config)
             behavior.start()
-            print("교정 모드 활성. Gemini 가 자세를 판단합니다 "
+            print(f"교정 모드 활성. 조건={condition}, Gemini 가 자세를 판단합니다 "
                   "(--no-correction 으로 끌 수 있음).")
 
         source = args.camera or perception.get("camera",
@@ -283,11 +363,21 @@ def run(args):
                 print("dry-run 입니다. 모터는 움직이지 않습니다 (--move 로 구동).")
 
             start = time.monotonic()
+            health.start(start)
             while not control.stop_event.is_set():
                 frame = camera.read()
-                if frame is None:
-                    continue
                 now = time.monotonic()
+                if frame is None:
+                    reason = health.check(now, control.heartbeat_at)
+                    if reason:
+                        control.safe_stop(reason)
+                        raise SafeStopRequested(reason)
+                    continue
+                health.record_frame(now)
+                reason = health.check(now, control.heartbeat_at)
+                if reason:
+                    control.safe_stop(reason)
+                    raise SafeStopRequested(reason)
                 landmarks, world = estimator.detect(frame,
                                                     (now - start) * 1000.0)
 
@@ -321,14 +411,28 @@ def run(args):
                 # 교정 판단 스레드에 최신 자세 전달
                 if behavior is not None and measured is not None:
                     behavior.update_posture(measured)
+                if response_tracker is not None and measured is not None:
+                    response_tracker.update(now, classify(measured).label)
 
                 # 교정 이벤트 소비
                 if behavior is not None:
                     event = behavior.poll_event()
                     if event:
+                        action = executor.build(event)
+                        if action is not None:
+                            if action.pose is not None:
+                                control.submit_behavior(action)
+                            applied_at = time.monotonic()
+                            if response_tracker is not None:
+                                response_tracker.intervention(
+                                    applied_at, event.posture_label,
+                                    action.behavior)
+                            if speaker is not None:
+                                speaker.submit(action.speech, now=applied_at)
                         d = event.decision
+                        action_name = action.behavior if action else "ignore"
                         print(f"[교정] [{d.action}] {d.speech} "
-                              f"(행동: {d.behavior}, 강도: {event.urgency})")
+                              f"(행동: {action_name}, 강도: {event.urgency})")
 
                 if calibration_deadline is not None:
                     if raw is not None:
@@ -366,8 +470,18 @@ def run(args):
                         break
 
                 if control.error:
-                    raise control.error
+                    raise SafeStopRequested(
+                        f"control_error: {control.error}")
+        if control.error:
+            raise SafeStopRequested(f"control_error: {control.error}")
+        if control.safe_stop_reason:
+            raise SafeStopRequested(control.safe_stop_reason)
         return 0
+    except SafeStopRequested as exc:
+        if event_logger is not None:
+            event_logger.record("safe_stop", reason=str(exc))
+        print(f"[SAFE_STOP] {exc}", file=sys.stderr)
+        return 1
     except (BusError, CameraError, WriterError) as exc:
         sys.exit(str(exc))
     except KeyboardInterrupt:
@@ -376,17 +490,35 @@ def run(args):
     finally:
         if behavior is not None:
             behavior.stop()
+            behavior.join(timeout=1.0)
         if control is not None:
             control.stop_event.set()
             control.join(timeout=2.0)
-        if writer is not None:
+        if writer is not None and (control is None or control.motion_enabled):
+            # 모터를 먼저 정리한다. TTS 종료는 외부 프로세스가 반환될 때까지
+            # 기다릴 수 있으므로 하드웨어 정리보다 앞에 두면 안 된다.
             try:
-                writer.write_targets(mapper.neutral_targets())
+                # 정리 경로도 운용 한계 검사를 건너뛰지 않는다.
+                safe_neutral = safety_gate.clamp_targets(mapper.neutral_targets())
+                writer.write_targets(safe_neutral)
                 time.sleep(1.0)
-                writer.set_torque(False)
                 print("중립 복귀 후 토크 해제 완료")
             except Exception as exc:
-                print(f"정리 중 오류: {exc}", file=sys.stderr)
+                print(f"중립 복귀 중 오류: {exc}", file=sys.stderr)
+            finally:
+                # 중립 복귀 실패와 토크 해제를 묶지 않는다. 일부 관절에서
+                # 통신이 실패해도 writer가 가능한 관절을 계속 시도한다.
+                try:
+                    writer.set_torque(False)
+                    print("토크 해제 완료")
+                except Exception as exc:
+                    print(f"토크 해제 중 오류: {exc}", file=sys.stderr)
+        if response_tracker is not None:
+            response_tracker.close()
+        if speaker is not None:
+            speaker.stop()
+        if event_logger is not None:
+            event_logger.close()
         stack.close()
         cv2.destroyAllWindows()
 
@@ -406,6 +538,9 @@ def main():
                         help="창을 띄우지 않는다 (헤드리스)")
     parser.add_argument("--no-correction", action="store_true",
                         help="Gemini 교정 판단을 끈다 (에코만)")
+    parser.add_argument("--condition",
+                        choices=("voice", "mirror"),
+                        help="실험 개입 조건. 생략하면 config/posture.yaml 사용")
     return run(parser.parse_args())
 
 

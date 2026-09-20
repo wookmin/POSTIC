@@ -5,6 +5,7 @@ import pytest
 from src.perception.posture_features import PostureAngles
 from src.posture.classifier import classify
 from src.posture.policy import PolicyConfig, PolicyState, should_trigger, urgency_level
+from src.behavior.executor import BehaviorExecutor
 
 
 class TestClassifier:
@@ -94,3 +95,62 @@ class TestPolicy:
         assert urgency_level(state, self.config) == 2
         state.correction_count = 4
         assert urgency_level(state, self.config) == 3
+
+
+class FakeGate:
+    def clamp_pose(self, pose):
+        return pose
+
+    def clamp_duration(self, duration):
+        return min(1.5, duration)
+
+
+class TestBehaviorExecutor:
+    def event(self, action="gentle_remind", behavior="mimic_slouch",
+              angles=None):
+        decision = type("Decision", (), {
+            "action": action,
+            "behavior": behavior,
+            "speech": "등을 펴보세요.",
+        })()
+        return type("Event", (), {
+            "decision": decision,
+            "observed_angles": angles,
+        })()
+
+    def test_mirror_without_observation_does_not_guess_pose(self):
+        executor = BehaviorExecutor({}, FakeGate())
+        action = executor.build(self.event())
+        assert action.behavior == "mirror"
+        assert action.pose is None
+
+    def test_ignore_does_not_create_action(self):
+        executor = BehaviorExecutor({}, FakeGate())
+        assert executor.build(self.event(action="ignore")) is None
+
+    def test_mirror_uses_observed_posture(self):
+        observed = PostureAngles(1.0, 21.0, 13.0, 1.0)
+        executor = BehaviorExecutor({"experiment": {"condition": "mirror"}},
+                                    FakeGate())
+        action = executor.build(self.event(angles=observed))
+        assert action.behavior == "mirror"
+        assert action.pose.torso_pitch_deg == 21.0
+        assert action.pose.neck_pitch_deg == 13.0
+        assert action.speech == ""
+
+    def test_voice_condition_has_no_motion_override(self):
+        executor = BehaviorExecutor({"experiment": {"condition": "voice"}},
+                                    FakeGate())
+        action = executor.build(self.event())
+        assert action.behavior == "voice"
+        assert action.pose is None
+        assert action.speech == "등을 펴보세요."
+
+    def test_unsupported_condition_is_rejected(self):
+        try:
+            BehaviorExecutor({"experiment": {"condition": "display"}},
+                             FakeGate())
+        except ValueError as exc:
+            assert "지원하지 않는 개입 조건" in str(exc)
+        else:
+            raise AssertionError("지원하지 않는 조건이 허용됨")

@@ -58,3 +58,30 @@ correction:
   cooldown_seconds: 30.0    # 교정 후 재호출 금지 시간
   escalation_seconds: 60.0  # 같은 문제 반복 시 강도 높이는 기준
   check_interval_sec: 1.0   # 판단 스레드 체크 주기 (초)
+
+# LLM 판단과 하드웨어 사이의 결정론적 정책. 이 값은 모델 출력으로
+# 변경되지 않는다.
+safety:
+  schema: postic.safety.v1
+  motion:
+    max_step_deg: 1.5
+    behavior_max_duration_sec: 1.5
+    stop_always: true
+  health:
+    camera_timeout_sec: 2.0
+    control_timeout_sec: 1.0
+
+# 사용자 실험 조건. 바퀴 이동은 파일럿에서 필요성이 확인될 때까지 제외한다.
+experiment:
+  condition: mirror           # voice | mirror
+  action_duration_sec: 1.0
+  response_timeout_sec: 15.0
+  log_dir: data/runs
+
+# TTS는 별도 스레드에서 실행된다. 기본은 로그만 남기는 dry-run이다.
+audio:
+  tts:
+    enabled: false
+    command: [espeak-ng, -v, ko]
+    cooldown_sec: 8.0
+    timeout_sec: 10.0

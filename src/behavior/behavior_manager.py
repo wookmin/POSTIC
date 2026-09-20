@@ -26,6 +26,7 @@ class CorrectionEvent:
     decision: GeminiDecision
     posture_label: str
     urgency: int
+    observed_angles: Optional[PostureAngles] = None
 
 
 class BehaviorManager(threading.Thread):
@@ -55,7 +56,9 @@ class BehaviorManager(threading.Thread):
         self._check_interval = correction.get("check_interval_sec", 1.0)
         self._policy_state = PolicyState()
         self._events = SimpleQueue()
-        self._stop = threading.Event()
+        # threading.Thread.join() 내부에서 사용하는 _stop() 메서드를
+        # 가리지 않도록 별도 이름을 사용한다.
+        self._stop_event = threading.Event()
 
         # 최신 자세를 메인 스레드가 넣고, 판단 스레드가 읽는다.
         self._lock = threading.Lock()
@@ -76,12 +79,12 @@ class BehaviorManager(threading.Thread):
         return self._events.get_nowait()
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
     def run(self):
-        while not self._stop.is_set():
-            self._stop.wait(timeout=self._check_interval)
-            if self._stop.is_set():
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=self._check_interval)
+            if self._stop_event.is_set():
                 break
             self._evaluate()
 
@@ -125,5 +128,6 @@ class BehaviorManager(threading.Thread):
             decision=decision,
             posture_label=posture.label,
             urgency=urgency,
+            observed_angles=angles,
         )
         self._events.put(event)

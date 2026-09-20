@@ -10,6 +10,8 @@ from src.safety.supervisor import (  # noqa: E402
     STATE_IDLE, STATE_RETURNING, STATE_TRACKING, IdlePolicy, SlewLimiter,
     max_step_ticks,
 )
+from src.safety.gate import SafetyGate, SafetyViolation
+from src.safety.health import HealthMonitor
 
 
 def joints():
@@ -231,3 +233,72 @@ class TestIdleGracePeriod:
         # 유예가 초기화되었으므로 0.6초 뒤에도 아직 tracking 이어야 한다.
         state, _ = self.policy.update(0.6, False, {"a": 500}, self.neutral)
         assert state == STATE_TRACKING
+
+
+class TestSafetyGate:
+    def setup_method(self):
+        self.mapper = JointMapper(joints(), DISTRIBUTION)
+        self.config = {
+            "angles": {
+                "max_torso_pitch_deg": 30,
+                "max_neck_pitch_deg": 25,
+            },
+            "motion": {"max_step_deg": 1.5},
+            "safety": {"motion": {"behavior_max_duration_sec": 1.5}},
+        }
+        self.gate = SafetyGate(self.mapper, self.config)
+
+    def test_limits_targets_to_joint_operating_range(self):
+        got = self.gate.clamp_targets({
+            "base_pitch": -100,
+            "waist_pitch": 9999,
+            "spine_lower_pitch": 2048,
+            "spine_upper_pitch": 2048,
+            "neck_pitch": 3018,
+        })
+        assert got["base_pitch"] == 1877
+        assert got["waist_pitch"] == 2276
+
+    def test_unknown_joint_fails_loud(self):
+        with pytest.raises(SafetyViolation, match="알 수 없는 관절"):
+            self.gate.clamp_targets({"not_a_joint": 2048})
+
+    def test_non_finite_target_fails_loud(self):
+        with pytest.raises(SafetyViolation, match="유효하지 않습니다"):
+            self.gate.clamp_targets({"base_pitch": float("nan")})
+
+    def test_unknown_safety_schema_fails_loud(self):
+        with pytest.raises(SafetyViolation, match="지원하지 않는 safety schema"):
+            SafetyGate(self.mapper, {
+                "safety": {"schema": "postic.safety.v2"},
+            })
+
+    def test_behavior_pose_and_duration_are_bounded(self):
+        pose = PostureAngles(1.0, 90.0, -80.0, 1.0)
+        safe = self.gate.clamp_pose(pose)
+        assert safe.torso_pitch_deg == 30
+        assert safe.neck_pitch_deg == -25
+        assert self.gate.clamp_duration(99.0) == 1.5
+
+
+class TestHealthMonitor:
+    def setup_method(self):
+        self.monitor = HealthMonitor({
+            "safety": {"health": {
+                "camera_timeout_sec": 2.0,
+                "control_timeout_sec": 1.0,
+            }}
+        })
+        self.monitor.start(0.0)
+
+    def test_fresh_frame_and_heartbeat_are_healthy(self):
+        self.monitor.record_frame(1.0)
+        assert self.monitor.check(1.5, 1.4) is None
+
+    def test_camera_timeout_requests_safe_stop(self):
+        self.monitor.record_frame(1.0)
+        assert "camera_timeout" in self.monitor.check(3.1, 3.0)
+
+    def test_control_timeout_requests_safe_stop(self):
+        self.monitor.record_frame(1.0)
+        assert "control_timeout" in self.monitor.check(2.1, 0.9)

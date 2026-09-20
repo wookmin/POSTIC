@@ -4,7 +4,11 @@
 불필요한 흔들림으로 나타나므로 GroupSyncWrite 를 쓴다.
 """
 
-from dynamixel_sdk import COMM_SUCCESS, GroupSyncWrite
+try:
+    from dynamixel_sdk import COMM_SUCCESS, GroupSyncWrite
+except ImportError:  # dry-run과 하드웨어 없는 테스트는 SDK 없이도 가능해야 한다.
+    COMM_SUCCESS = None
+    GroupSyncWrite = None
 
 ADDR_TORQUE_ENABLE = 64
 ADDR_GOAL_POSITION = 116
@@ -22,6 +26,10 @@ class JointWriter:
 
     def __init__(self, packet, port, joint_ids,
                  profile_velocity=40, profile_acceleration=20):
+        if GroupSyncWrite is None:
+            raise WriterError(
+                "dynamixel_sdk 를 찾을 수 없습니다. "
+                "requirements.txt 를 설치한 환경에서 --move 를 사용하세요.")
         self._packet = packet
         self._port = port
         self._joint_ids = dict(joint_ids)
@@ -29,11 +37,19 @@ class JointWriter:
         self._profile_acceleration = profile_acceleration
         self._sync = GroupSyncWrite(port, packet, ADDR_GOAL_POSITION,
                                     GOAL_POSITION_BYTES)
-        self._torque_on = False
+        # 버스 오류는 관절마다 발생할 수 있다. 전체를 하나의 bool로
+        # 기억하면 부분 성공 뒤의 토크 해제를 건너뛸 수 있다.
+        self._torque_state = {name: False for name in self._joint_ids}
 
     @property
     def torque_on(self):
-        return self._torque_on
+        return bool(self._torque_state) and all(
+            state is True for state in self._torque_state.values())
+
+    @property
+    def torque_states(self):
+        """관절별 토크 상태. True/False/None(확인 불가)."""
+        return dict(self._torque_state)
 
     def _write1(self, motor_id, addr, value, what):
         comm, err = self._packet.write1ByteTxRx(self._port, motor_id, addr, value)
@@ -63,12 +79,22 @@ class JointWriter:
                          self._profile_velocity, "Profile Velocity")
 
     def set_torque(self, enabled):
-        if enabled == self._torque_on:
+        if all(state is enabled for state in self._torque_state.values()):
             return
-        for motor_id in self._joint_ids.values():
-            self._write1(motor_id, ADDR_TORQUE_ENABLE, 1 if enabled else 0,
-                         "토크 인가" if enabled else "토크 해제")
-        self._torque_on = enabled
+        errors = []
+        for name, motor_id in self._joint_ids.items():
+            if self._torque_state[name] is enabled:
+                continue
+            try:
+                self._write1(motor_id, ADDR_TORQUE_ENABLE, 1 if enabled else 0,
+                             "토크 인가" if enabled else "토크 해제")
+            except WriterError as exc:
+                self._torque_state[name] = None
+                errors.append(str(exc))
+            else:
+                self._torque_state[name] = enabled
+        if errors:
+            raise WriterError("; ".join(errors))
 
     def write_targets(self, targets):
         """{관절 이름: tick} 을 한 번에 내보낸다."""
