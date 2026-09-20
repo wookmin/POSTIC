@@ -54,7 +54,7 @@ class BehaviorManager(threading.Thread):
         self._use_gemini = self.condition != "posture_trigger"
         correction = config.get("correction", {})
         self._config = PolicyConfig(
-            sustain_seconds=correction.get("sustain_seconds", 5.0),
+            sustain_seconds=correction.get("sustain_seconds", 3.0),
             cooldown_seconds=correction.get("cooldown_seconds", 30.0),
             escalation_seconds=correction.get("escalation_seconds", 60.0),
         )

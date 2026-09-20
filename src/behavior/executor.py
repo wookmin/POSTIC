@@ -21,6 +21,7 @@ class BehaviorAction:
     pose: Optional[PostureAngles]
     duration_sec: float
     speech: str
+    hold_until_good: bool = False
 
 
 class BehaviorExecutor:
@@ -44,7 +45,7 @@ class BehaviorExecutor:
         self.fixed_poses = {
             # 몸통 각도는 4개 관절에 나뉘므로 작은 값은 실제로 거의
             # 보이지 않는다. 기본값도 시연용 과장 포즈로 둔다.
-            "bad_posture": {"torso_pitch_deg": 27.0, "neck_pitch_deg": 24.0},
+            "bad_posture": {"torso_pitch_deg": 30.0, "neck_pitch_deg": 25.0},
             "slouch": {"torso_pitch_deg": 14.0, "neck_pitch_deg": 4.0},
             "forward_head": {"torso_pitch_deg": 4.0, "neck_pitch_deg": 14.0},
             "slouch_and_forward": {
@@ -105,6 +106,7 @@ class BehaviorExecutor:
                 behavior="bad_posture" if use_generic else posture_label,
                 pose=self.safety_gate.clamp_pose(pose),
                 duration_sec=self.safety_gate.clamp_duration(self.duration_sec),
+                hold_until_good=True,
                 # 현재 프로토타입은 음성 장치 없이 모션만 검증한다.
                 speech="",
             )

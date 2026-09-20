@@ -250,6 +250,7 @@ class TestBehaviorExecutor:
         assert action.behavior == "bad_posture"
         assert action.pose.torso_pitch_deg == 14.0
         assert action.pose.neck_pitch_deg == 14.0
+        assert action.hold_until_good is True
 
     def test_posture_trigger_ignores_unknown_label(self):
         executor = BehaviorExecutor(

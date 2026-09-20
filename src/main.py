@@ -2,7 +2,8 @@
 """카메라로 본 나쁜 자세에만 미리 정한 동작으로 반응한다.
 
 정상 자세에서는 로봇을 중립에 두고 움직이지 않는다. 나쁜 자세가 정책에
-정해진 시간 이상 지속될 때만 미리 정의된 고정 포즈를 잠시 실행한다.
+정해진 시간 이상 지속될 때만 미리 정의된 고정 포즈를 실행하고, 사용자가
+정상 자세로 돌아오면 중립으로 복귀한다.
 기존 지연 미러링 모드는 호환을 위해 남아 있지만 기본 모드는 아니다.
 
 기본은 모터를 건드리지 않는다. 실제로 움직이려면 --move 를 붙인다.
@@ -129,7 +130,10 @@ class ControlLoop(threading.Thread):
             started = self._behavior_started_at
             if action is None or started is None:
                 return None
-            if now - started >= action.duration_sec:
+            # posture_trigger의 과장 포즈는 사용자가 정상 자세로 돌아올
+            # 때까지 유지한다. mirror 등 기존 행동은 기존 duration을 쓴다.
+            if (not getattr(action, "hold_until_good", False)
+                    and now - started >= action.duration_sec):
                 self._behavior_action = None
                 self._behavior_started_at = None
                 self._behavior_returning = True
@@ -151,7 +155,8 @@ class ControlLoop(threading.Thread):
             abs(self.commanded.get(name, value) - value) <= 15
             for name, value in self.neutral.items())
 
-    def _posture_trigger_output(self, now, person_visible, state):
+    def _posture_trigger_output(self, now, person_visible, state,
+                                posture_label="unknown"):
         """반응 모드의 목표와 토크 상태를 계산한다.
 
         대기 중에는 시작 시점의 기준 자세를 토크로 유지하고, 이벤트가 있을
@@ -160,8 +165,11 @@ class ControlLoop(threading.Thread):
         """
         behavior_pose = self._behavior_pose(now)
         if behavior_pose is not None:
-            if person_visible and state == STATE_TRACKING:
+            if (person_visible and state == STATE_TRACKING
+                    and posture_label != "good"):
                 return self.mapper.to_targets(behavior_pose), True
+            # 사람 이탈·관측 불가·정상 자세 복귀 시 과장 포즈를 끝내고
+            # 중립으로 천천히 돌아간다.
             self._cancel_behavior(now)
 
         with self._behavior_lock:
@@ -219,6 +227,8 @@ class ControlLoop(threading.Thread):
             else:
                 played = self.buffer.sample(now - self.delay)
             person_visible = played is not None and played.valid
+            posture_label = (classify(played).label
+                             if person_visible else "unknown")
 
             state, torque = self.policy.update(now, person_visible,
                                                self.commanded, self.neutral)
@@ -226,7 +236,7 @@ class ControlLoop(threading.Thread):
 
             if self.condition == "posture_trigger":
                 desired, torque_enabled = self._posture_trigger_output(
-                    now, person_visible, state)
+                    now, person_visible, state, posture_label)
             elif self.motion_enabled:
                 if state == STATE_TRACKING:
                     if person_visible:

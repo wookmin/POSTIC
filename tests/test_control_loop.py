@@ -230,3 +230,41 @@ def test_posture_trigger_stays_neutral_after_behavior_release():
         started + 4.1, True, "tracking")
     assert desired == {"joint": 50}
     assert torque is False
+
+
+def test_posture_trigger_holds_pose_until_good_posture():
+    loop = ControlLoop(
+        buffer=None,
+        mapper=FakeMapper(),
+        writer=None,
+        config={
+            "echo": {"delay_sec": 0.0, "control_hz": 1000},
+            "motion": {
+                "return_to_neutral_sec": 2.0,
+                "idle_release_sec": 3.0,
+                "person_lost_grace_sec": 0.5,
+            },
+        },
+        safety_gate=FakeGate(),
+        condition="posture_trigger",
+    )
+    action = SimpleNamespace(
+        pose=PostureAngles(1.0, 30.0, 25.0, 1.0),
+        duration_sec=0.0,
+        hold_until_good=True,
+    )
+    loop.submit_behavior(action)
+    started = loop._behavior_started_at
+
+    # duration_sec가 지나도 나쁜 자세가 계속되면 포즈를 유지한다.
+    desired, torque = loop._posture_trigger_output(
+        started + 10.0, True, "tracking", "slouch")
+    assert desired == {"joint": 60}
+    assert torque is True
+
+    # 정상 자세가 관측된 순간부터 중립 복귀를 시작한다.
+    loop.commanded = {"joint": 60}
+    desired, torque = loop._posture_trigger_output(
+        started + 11.0, True, "tracking", "good")
+    assert desired == {"joint": 50}
+    assert torque is True

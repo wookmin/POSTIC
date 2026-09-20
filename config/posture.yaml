@@ -53,7 +53,7 @@ motion:
 
 # 교정 판단 정책. BehaviorManager 가 이 값을 읽는다.
 correction:
-  sustain_seconds: 5.0      # 나쁜 자세가 이만큼 지속돼야 교정 트리거
+  sustain_seconds: 3.0      # 나쁜 자세가 이만큼 지속돼야 교정 트리거
   cooldown_seconds: 30.0    # 교정 후 재호출 금지 시간
   escalation_seconds: 60.0  # 같은 문제 반복 시 강도 높이는 기준
   check_interval_sec: 1.0   # 판단 스레드 체크 주기 (초)
@@ -81,15 +81,17 @@ experiment:
 # 사용자의 관측 각도를 복사하지 않고, 자세 라벨에 따라 이 값만 호출한다.
 # 실제 모터 목표는 JointMapper와 SafetyGate가 운용 범위 안에서 제한한다.
 intervention:
+  # posture_trigger는 action_duration_sec로 끝내지 않고 사용자가 정상
+  # 자세로 돌아올 때까지 유지한다. 이 값은 다른 행동 조건의 fallback이다.
   action_duration_sec: 1.5
   max_event_age_sec: 0.75  # 실행 직전 최신 자세와 이벤트 시각을 재확인
   poses:
     # 목·상체·어깨선 중 어느 항목이 나빠도 이 하나의 과장 포즈를 호출한다.
-    # 4개 몸통 관절에 분배되므로 14도는 겉으로 거의 보이지 않는다.
-    # 프로토타입 시연에서는 몸통 전체가 확실히 접혀 보이도록 크게 잡는다.
+    # 4개 몸통 관절에 분배되므로 작은 값은 겉으로 거의 보이지 않는다.
+    # 현재 안전 상한 안에서 시연용으로 최대한 크게 잡는다.
     bad_posture:
-      torso_pitch_deg: 27.0
-      neck_pitch_deg: 24.0
+      torso_pitch_deg: 30.0
+      neck_pitch_deg: 25.0
 
 # TTS는 별도 스레드에서 실행된다. 기본은 로그만 남기는 dry-run이다.
 audio:

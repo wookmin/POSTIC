@@ -13,7 +13,7 @@ from src.posture.classifier import PostureState
 @dataclass
 class PolicyConfig:
     """정책 파라미터. posture.yaml 의 correction 섹션에서 읽는다."""
-    sustain_seconds: float = 5.0      # 나쁜 자세가 이만큼 지속돼야 트리거
+    sustain_seconds: float = 3.0      # 나쁜 자세가 이만큼 지속돼야 트리거
     cooldown_seconds: float = 30.0    # 교정 후 재호출 금지 시간
     escalation_seconds: float = 60.0  # 같은 문제 반복 시 강도 높이는 기준
 
