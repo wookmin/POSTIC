@@ -13,12 +13,12 @@ import yaml
 
 try:
     from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS
-except ImportError as exc:
-    raise ImportError(
-        "dynamixel_sdk 를 찾을 수 없습니다. "
-        "~/dynamixel-venv/bin/python 으로 실행하거나 "
-        "pip install -r requirements.txt 를 먼저 실행하세요."
-    ) from exc
+except ImportError:
+    # 프리뷰·캘리브레이션·하드웨어 없는 테스트는 SDK 없이도 실행한다.
+    # 실제 버스 사용 시 open_bus()에서 명확한 BusError를 낸다.
+    PortHandler = None
+    PacketHandler = None
+    COMM_SUCCESS = None
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ROBOT_CONFIG = PROJECT_ROOT / "config" / "robot.yaml"
@@ -27,6 +27,15 @@ JOINTS_CONFIG = PROJECT_ROOT / "config" / "joints.yaml"
 
 class BusError(RuntimeError):
     pass
+
+
+def _require_sdk():
+    if PortHandler is None or PacketHandler is None:
+        raise BusError(
+            "dynamixel_sdk 를 찾을 수 없습니다. "
+            "~/dynamixel-venv/bin/python 으로 실행하거나 "
+            "pip install -r requirements.txt 를 먼저 실행하세요."
+        )
 
 
 def load_robot_config(path=ROBOT_CONFIG):
@@ -68,6 +77,7 @@ def active_ids(config=None):
 @contextmanager
 def open_bus(config=None, port=None, baudrate=None):
     """포트를 열고 (packet, port) 를 넘긴다. 빠져나올 때 항상 닫는다."""
+    _require_sdk()
     config = config or load_robot_config()
     bus = config["bus"]
     port_name = port or bus["port"]

@@ -67,7 +67,7 @@ joints:
     id: 8
     unit: 4
     role: spine
-    direction: 1              # +1 이면 tick 증가가 앞으로 숙임
+    direction: -1             # 이 축은 tick 감소가 앞으로 숙임
     zero_position: 2046
     min_position: 1818        # -20도
     max_position: 2274        # +20도

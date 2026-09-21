@@ -24,14 +24,14 @@ def build_upright(visibility=1.0):
     """바로 앉은 자세: 코(0.3) → 어깨(0.5) → 골반(0.8) 수직 정렬."""
     points = [Point() for _ in range(33)]
     # 골반: 이미지 하단
-    for idx in (LEFT_HIP, RIGHT_HIP):
-        points[idx] = Point(x=0.5, y=0.8, visibility=visibility)
+    points[LEFT_HIP] = Point(x=0.43, y=0.8, visibility=visibility)
+    points[RIGHT_HIP] = Point(x=0.57, y=0.8, visibility=visibility)
     # 어깨: 중간
-    for idx in (LEFT_SHOULDER, RIGHT_SHOULDER):
-        points[idx] = Point(x=0.5, y=0.5, visibility=visibility)
+    points[LEFT_SHOULDER] = Point(x=0.4, y=0.5, visibility=visibility)
+    points[RIGHT_SHOULDER] = Point(x=0.6, y=0.5, visibility=visibility)
     # 머리: 상단
-    for idx in (LEFT_EAR, RIGHT_EAR):
-        points[idx] = Point(x=0.5, y=0.3, visibility=visibility)
+    points[LEFT_EAR] = Point(x=0.47, y=0.3, visibility=visibility)
+    points[RIGHT_EAR] = Point(x=0.53, y=0.3, visibility=visibility)
     points[NOSE] = Point(x=0.5, y=0.3, visibility=visibility)
     return points
 
@@ -41,7 +41,7 @@ def build_slouch():
     points = build_upright()
     # 숙이면 어깨가 골반 대비 X로 치우침
     for idx in (LEFT_SHOULDER, RIGHT_SHOULDER):
-        points[idx] = Point(x=0.6, y=0.55, visibility=1.0)
+        points[idx].y = 0.62
     return points
 
 
@@ -49,8 +49,17 @@ def build_forward_head():
     """거북목: 머리가 어깨 대비 앞으로 (X로 치우짐)."""
     points = build_upright()
     for idx in (LEFT_EAR, RIGHT_EAR):
-        points[idx] = Point(x=0.6, y=0.35, visibility=1.0)
-    points[NOSE] = Point(x=0.6, y=0.35, visibility=1.0)
+        points[idx].y = 0.42
+    points[NOSE].y = 0.42
+    return points
+
+
+def build_lateral_tilt():
+    points = build_upright()
+    points[LEFT_SHOULDER].y = 0.42
+    points[RIGHT_SHOULDER].y = 0.58
+    points[LEFT_HIP].y = 0.74
+    points[RIGHT_HIP].y = 0.86
     return points
 
 
@@ -72,9 +81,56 @@ class TestExtractAngles2D:
         angles = extract_angles(None, points, timestamp=1.0)
         assert angles.neck_pitch_deg > 15.0
 
+    def test_lateral_tilt_is_separate_from_torso_pitch(self):
+        points = build_lateral_tilt()
+        angles = extract_angles(None, points, timestamp=1.0)
+        assert angles.lateral_tilt_deg > 15.0
+        assert angles.torso_pitch_deg < 12.0
+
+    def test_small_center_offset_does_not_become_lateral_during_slouch(self):
+        points = build_slouch()
+        for idx in (LEFT_SHOULDER, RIGHT_SHOULDER):
+            points[idx].x += 0.01
+
+        angles = extract_angles(None, points, timestamp=1.0)
+
+        assert angles.torso_pitch_deg > 15.0
+        assert angles.lateral_tilt_deg < 12.0
+
+    def test_mirrored_horizontal_landmarks_are_not_lateral_tilt(self):
+        points = build_upright()
+        for left, right in ((LEFT_SHOULDER, RIGHT_SHOULDER),
+                            (LEFT_HIP, RIGHT_HIP)):
+            points[left].x, points[right].x = (
+                points[right].x, points[left].x)
+
+        angles = extract_angles(None, points, timestamp=1.0)
+
+        assert angles.lateral_tilt_deg < 1.0
+
     def test_low_visibility_returns_none(self):
         points = build_upright(visibility=0.2)
         assert extract_angles(None, points, timestamp=1.0) is None
+
+    def test_hips_out_of_frame_still_measures_person_and_neck(self):
+        points = build_forward_head()
+        points[LEFT_HIP].visibility = 0.0
+        points[RIGHT_HIP].visibility = 0.0
+
+        angles = extract_angles(None, points, timestamp=1.0)
+
+        assert angles is not None
+        assert angles.torso_pitch_deg == 0.0
+        assert angles.neck_pitch_deg > 15.0
+
+    def test_hips_out_of_frame_uses_upper_body_slouch_proxy(self):
+        points = build_slouch()
+        points[LEFT_HIP].visibility = 0.0
+        points[RIGHT_HIP].visibility = 0.0
+
+        angles = extract_angles(None, points, timestamp=1.0)
+
+        assert angles.torso_pitch_deg > 15.0
 
     def test_empty_input_returns_none(self):
         assert extract_angles(None, None, timestamp=1.0) is None

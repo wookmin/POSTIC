@@ -44,6 +44,15 @@ class PoseBuffer:
                 return None
             return self._samples[0].timestamp, self._samples[-1].timestamp
 
+    def latest(self):
+        """가장 최근 관측값을 반환한다.
+
+        미러링처럼 지연된 샘플이 필요한 모드와 달리, 자세 반응 모드는
+        카메라가 현재 사람을 보고 있는지만 확인하면 되므로 최신값을 쓴다.
+        """
+        with self._lock:
+            return self._samples[-1] if self._samples else None
+
     def sample(self, when):
         """when 시점의 자세를 선형 보간해 돌려준다. 범위 밖이면 None.
 
@@ -78,6 +87,12 @@ class PoseBuffer:
             neck_pitch_deg=_lerp(before.neck_pitch_deg,
                                  after.neck_pitch_deg, ratio),
             confidence=min(before.confidence, after.confidence),
+            lateral_tilt_deg=_lerp(before.lateral_tilt_deg,
+                                   after.lateral_tilt_deg, ratio),
+            torso_compression=_lerp(before.torso_compression,
+                                    after.torso_compression, ratio),
+            neck_compression=_lerp(before.neck_compression,
+                                   after.neck_compression, ratio),
         )
 
 
