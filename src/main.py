@@ -12,6 +12,8 @@
     ~/dynamixel-venv/bin/python -m src.main --move       # 로봇 구동
 """
 
+"""테스트 주석"""
+
 import argparse
 import sys
 import threading
