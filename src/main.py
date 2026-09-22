@@ -51,6 +51,7 @@ from src.safety.health import HealthMonitor, SafeStopRequested  # noqa: E402
 from src.audio.tts import SpeechQueue  # noqa: E402
 from src.telemetry.event_log import EventLogger  # noqa: E402
 from src.telemetry.response_tracker import ResponseTracker  # noqa: E402
+from src.telemetry.posture_observer import PostureEpisodeObserver  # noqa: E402
 
 POSTURE_CONFIG = PROJECT_ROOT / "config" / "posture.yaml"
 
@@ -413,6 +414,10 @@ def run(args):
     intervention_config = config.get("intervention") or {}
     max_event_age_sec = float(
         intervention_config.get("max_event_age_sec", 0.75))
+    correction_config = config.get("correction") or {}
+    telemetry_config = config.get("telemetry") or {}
+    source = args.camera or perception.get("camera",
+                                           perception.get("camera_index", 0))
     try:
         executor = BehaviorExecutor(config, safety_gate, condition)
     except ValueError as exc:
@@ -420,16 +425,37 @@ def run(args):
 
     event_logger = None
     response_tracker = None
+    posture_observer = None
     speaker = None
     if not args.calibrate:
         log_dir = Path(experiment.get("log_dir", "data/runs"))
         if not log_dir.is_absolute():
             log_dir = PROJECT_ROOT / log_dir
-        event_logger = EventLogger(log_dir, condition=condition)
+        recovery_confirm_sec = float(
+            telemetry_config.get("recovery_confirm_sec", 1.0))
+        session_metadata = {
+            "participant_id": args.participant_id or None,
+            "move_enabled": bool(args.move),
+            "posture_trigger_sustain_sec": float(
+                correction_config.get("sustain_seconds", 3.0)),
+            "response_timeout_sec": float(
+                experiment.get("response_timeout_sec", 15.0)),
+            "recovery_confirm_sec": recovery_confirm_sec,
+            "camera_source": str(source),
+            "camera_width": int(perception["width"]),
+            "camera_height": int(perception["height"]),
+        }
+        event_logger = EventLogger(log_dir, condition=condition,
+                                   metadata=session_metadata)
         response_tracker = ResponseTracker(
             event_logger,
             response_timeout_sec=float(
                 experiment.get("response_timeout_sec", 15.0)),
+            recovery_confirm_sec=recovery_confirm_sec,
+        )
+        posture_observer = PostureEpisodeObserver(
+            event_logger,
+            sustain_seconds=correction_config.get("sustain_seconds", 3.0),
         )
         audio = config.get("audio") or {}
         speaker = SpeechQueue(audio.get("tts") or {})
@@ -458,8 +484,6 @@ def run(args):
                 print(f"교정 모드 활성. 조건={condition}, Gemini 가 자세를 판단합니다 "
                       "(--no-correction 으로 끌 수 있음).")
 
-        source = args.camera or perception.get("camera",
-                                               perception.get("camera_index", 0))
         with CameraStream(source, perception["width"],
                           perception["height"]) as camera, \
                 PoseEstimator(args.model
@@ -527,10 +551,13 @@ def run(args):
                 # 실패 프레임을 생략하면 이전 나쁜 자세가 보이지 않은
                 # 시간까지 지속된 것으로 오인할 수 있다.
                 observed = measured or PostureAngles(now, 0.0, 0.0, 0.0)
+                current_posture = classify(observed)
+                if posture_observer is not None:
+                    posture_observer.observe(now, current_posture, observed)
                 if behavior is not None:
                     behavior.update_posture(observed)
                 if response_tracker is not None:
-                    response_tracker.update(now, classify(observed).label)
+                    response_tracker.update(now, current_posture.label)
 
                 # 교정 이벤트 소비
                 if behavior is not None:
@@ -538,8 +565,10 @@ def run(args):
                     if event:
                         action = None
                         event_now = time.monotonic()
-                        current_posture = classify(observed)
                         age = event_now - event.timestamp
+                        episode_id = (posture_observer.trigger(
+                            event.timestamp, event.posture_label)
+                            if posture_observer is not None else None)
                         event_is_current = (
                             observed.valid
                             and age >= 0.0
@@ -551,48 +580,60 @@ def run(args):
                             if action is not None:
                                 delivered = False
                                 simulated = False
+                                accepted_outputs = []
                                 if action.pose is not None:
                                     if writer is None:
                                         simulated = True
                                     else:
                                         delivered = control.submit_behavior(action)
+                                        if delivered:
+                                            accepted_outputs.append(
+                                                "motor_control_queue")
                                 if speaker is not None and action.speech:
-                                    delivered = (speaker.submit(action.speech)
-                                                 or delivered)
+                                    speech_accepted = speaker.submit(
+                                        action.speech)
+                                    delivered = speech_accepted or delivered
+                                    if speech_accepted:
+                                        accepted_outputs.append("tts_queue")
                                 if delivered and response_tracker is not None:
                                     applied_at = time.monotonic()
                                     response_tracker.intervention(
                                         applied_at, event.posture_label,
-                                        action.behavior)
+                                        action.behavior,
+                                        episode_id=episode_id,
+                                        accepted_outputs=accepted_outputs)
                                 elif simulated and event_logger is not None:
                                     event_logger.record(
                                         "intervention_simulated",
                                         timestamp=time.monotonic(),
                                         posture=event.posture_label,
                                         behavior=action.behavior,
+                                        episode_id=episode_id,
                                     )
-                                elif not delivered and event_logger is not None:
-                                    event_logger.record(
-                                        "intervention_skipped",
-                                        timestamp=time.monotonic(),
+                                elif not delivered and posture_observer is not None:
+                                    posture_observer.intervention_skipped(
+                                        time.monotonic(), "delivery_failed",
                                         posture=event.posture_label,
-                                        reason="delivery_failed",
+                                        behavior=action.behavior,
                                     )
                             else:
                                 # 실행기가 행동을 만들지 못한 경우도 실제
                                 # 개입이 아니므로 다음 감지를 허용한다.
+                                if posture_observer is not None:
+                                    posture_observer.intervention_skipped(
+                                        time.monotonic(), "executor_returned_none",
+                                        posture=event.posture_label,
+                                    )
                                 behavior.rearm_after_skipped_event()
                         else:
-                            if event_logger is not None:
+                            if posture_observer is not None:
                                 reason = ("person_lost" if not observed.valid
                                           else "posture_changed" if
                                           current_posture.label != event.posture_label
                                           else "event_expired")
-                                event_logger.record(
-                                    "intervention_skipped",
-                                    timestamp=event_now,
+                                posture_observer.intervention_skipped(
+                                    event_now, reason,
                                     posture=event.posture_label,
-                                    reason=reason,
                                     event_age_sec=round(age, 4),
                                 )
                             behavior.rearm_after_skipped_event()
@@ -684,8 +725,11 @@ def run(args):
                     print("토크 해제 완료")
                 except Exception as exc:
                     print(f"토크 해제 중 오류: {exc}", file=sys.stderr)
+        close_at = time.monotonic()
         if response_tracker is not None:
-            response_tracker.close()
+            response_tracker.close(close_at)
+        if posture_observer is not None:
+            posture_observer.close(close_at)
         if speaker is not None:
             speaker.stop()
         if event_logger is not None:
@@ -712,6 +756,8 @@ def main():
     parser.add_argument("--condition",
                         choices=("posture_trigger", "voice", "mirror"),
                         help="실험 개입 조건. 생략하면 config/posture.yaml 사용")
+    parser.add_argument("--participant-id",
+                        help="로그용 익명 참가자 코드 (이름/이메일은 입력하지 마세요)")
     return run(parser.parse_args())
 
 

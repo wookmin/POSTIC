@@ -17,7 +17,8 @@ from pathlib import Path
 class EventLogger:
     """세션 단위 JSONL 이벤트 로거."""
 
-    def __init__(self, log_dir="data/runs", condition="unknown", session_id=None):
+    def __init__(self, log_dir="data/runs", condition="unknown", session_id=None,
+                 metadata=None):
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.condition = condition
         self.started_at = time.monotonic()
@@ -26,7 +27,8 @@ class EventLogger:
         self._disabled = False
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.record("session_started", condition=condition)
+            self.record("session_started", condition=condition,
+                        metadata=metadata or {})
         except OSError:
             self._disabled = True
 

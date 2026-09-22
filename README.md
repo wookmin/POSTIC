@@ -130,6 +130,19 @@ python -m src.main --no-preview --condition mirror  # 기존 미러링 호환 �
 대화 전문은 저장하지 않습니다. 실제 음성을 켜려면 `config/posture.yaml`의
 `audio.tts.enabled`를 `true`로 바꾸고 장치에 `espeak-ng`를 설치합니다.
 
+참가자 이름 대신 팀에서 정한 익명 코드를 붙여 실행할 수 있습니다.
+
+```bash
+python -m src.main --no-preview --condition posture_trigger --participant-id P01
+python scripts/summarize_posture_logs.py
+```
+
+요약 명령은 `data/summaries/episodes.csv`와
+`data/summaries/interventions.csv`를 만듭니다. 회복시간은 첫 `good` 판정과
+1초 안정 확인 완료 시각을 각각 기록하며, 이는 웹캠 분류 결과 기준입니다.
+개입 로그의 출력 채널은 요청이 모터 제어 큐 또는 TTS 큐에 접수됐다는 뜻이며,
+실제 물리적 동작·소리 완료를 보증하지 않습니다.
+
 현재 기본 실험 조건은 자세 반응이며, 음성 알림과 기존 미러링 모드는 호환용으로
 남아 있습니다. 디스플레이를 확보하면
 `display` 표현 기능을, 바퀴를 확보하면 `locomotion` 이동 기능을 별도 capability로
@@ -137,7 +150,7 @@ python -m src.main --no-preview --condition mirror  # 기존 미러링 호환 �
 
 ## 검증 상태
 
-- 단위 테스트: `107 passed`
+- 단위 테스트: 111 passed (로그 기능 추가 후 로컬 실행)
 - 기본 동작: 노트북 웹캠 기반
 - 모터 제어: Dynamixel 위치 제어 모드
 - 안전 기능: 관절 운용 범위, slew limit, 하드웨어 오류, 중립 복귀, 토크 해제
