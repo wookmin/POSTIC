@@ -1,0 +1,2 @@
+{"event": "session_started", "session_id": "f70f77734073", "condition": "posture_trigger", "timestamp": "2026-09-28T17:13:10.711472+00:00", "elapsed_sec": 0.0}
+{"event": "session_finished", "session_id": "f70f77734073", "condition": "posture_trigger", "timestamp": "2026-09-28T17:13:12.697029+00:00", "elapsed_sec": 1.9855}

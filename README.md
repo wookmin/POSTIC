@@ -113,6 +113,36 @@ OBSERVING → INTERVENING → REACQUIRING → RECOVERING
 로봇이 움직이는 동안에는 자세 판정을 일시정지하고, 동작이 끝난 뒤 사용자를
 다시 찾고 0.5~1초 동안 landmark 품질을 확인한 다음 복구 여부를 판단합니다.
 
+### 로봇 머리에 카메라를 다는 경우 (`camera_mount: robot`)
+
+카메라가 몸통·목과 함께 움직이면 로봇이 숙일 때 화면 전체가 바뀐다.
+`config/posture.yaml`에서 다음처럼 바꾸면 이 흐름으로 동작한다.
+
+```yaml
+perception:
+  camera: /dev/video2     # 로봇 카메라 장치
+  camera_mount: robot
+  camera_rotate: 0        # 카메라를 돌려 달았으면 90/180/270
+```
+
+```text
+관측(시작 자세) ─ 나쁜 자세 3초 ─→ 과장 포즈 (판정 중지, intervention_hold_sec 유지)
+     ↑                                        │
+재확보 (reacquire_sec) ← 안정화 (settle_sec) ← 시작 자세로 복귀
+```
+
+- 판정은 로봇이 **시작할 때의 자세(관측 자세)** 에 멈춰 있을 때만 한다.
+  개입이 끝나면 중립이 아니라 이 자세로 돌아가 같은 시점에서 다시 본다.
+- 과장 포즈 중에는 사용자를 볼 수 없으므로 "정상 자세가 될 때까지 유지"
+  대신 정해진 시간만 유지한다.
+- 관측 자세에서는 토크를 풀지 않는다. 컬럼이 처지면 시점이 바뀐다.
+- 복귀 후에도 나쁜 자세면 다시 3초를 센 뒤 재반응한다
+  (`robot_camera.rearm_after_reacquire: false`면 정상 자세 확인 전까지 대기).
+- `mirror` 조건은 로봇 카메라와 함께 구동할 수 없다.
+- 판정 임계값은 노트북 웹캠 기준이다. 로봇 카메라의 관측 자세에서
+  바른 자세·구부정한 자세를 찍어 오검출을 확인하고, 필요하면
+  `--calibrate` 후 `use_saved_reference: true`로 기준값을 적용한다.
+
 자세 인식 카메라의 상세 안정화 계획은
 [`CAMERA_POSITION_STABILIZATION.md`](CAMERA_POSITION_STABILIZATION.md),
 YEGAM 전체 기획과 연구 확장안은

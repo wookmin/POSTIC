@@ -13,6 +13,14 @@ _BACKENDS = {
 }
 _DEFAULT_BACKEND = _BACKENDS.get(platform.system(), cv2.CAP_ANY)
 
+# 로봇에 카메라를 옆으로 눕히거나 거꾸로 달 수 있어 시계 방향 회전을 지원한다.
+_ROTATIONS = {
+    0: None,
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
 
 class CameraError(RuntimeError):
     pass
@@ -25,10 +33,14 @@ class CameraStream:
     장치가 여러 개일 때는 경로로 지정하는 편이 안전하다.
     """
 
-    def __init__(self, source=0, width=640, height=480):
+    def __init__(self, source=0, width=640, height=480, rotate=0, mirror=True):
+        if int(rotate) not in _ROTATIONS:
+            raise CameraError(f"rotate 는 0/90/180/270 중 하나여야 합니다: {rotate}")
         self.source = source
         self.width = width
         self.height = height
+        self.rotate = _ROTATIONS[int(rotate)]
+        self.mirror = mirror
         self._capture = None
 
     def __enter__(self):
@@ -58,5 +70,7 @@ class CameraStream:
         ok, frame = self._capture.read()
         if not ok or frame is None:
             return None
+        if self.rotate is not None:
+            frame = cv2.rotate(frame, self.rotate)
         # 거울처럼 보이는 편이 자세를 확인하기 쉽다.
-        return cv2.flip(frame, 1)
+        return cv2.flip(frame, 1) if self.mirror else frame

@@ -16,7 +16,7 @@ opencv-python==5.0.0.93
 numpy==2.2.6
 
 # 마이크 / 음성
-vosk==0.3.45
+vosk==0.3.44
 sounddevice==0.5.5
 
 # Gemini

@@ -1,6 +1,6 @@
 # Dynamixel 버스 설정. 모든 스크립트가 이 파일을 단일 소스로 읽는다.
 bus:
-  port: /dev/ttyUSB0
+  port: /dev/tty.usbserial-FT45BNRZ
   baudrate: 1000000
   protocol: 2.0
 

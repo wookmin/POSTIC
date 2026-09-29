@@ -10,7 +10,14 @@ echo:
 perception:
   # 노트북 내장 카메라를 사용한다. 장치 번호가 다른 환경에서는
   # --camera 인자로 덮어쓴다.
-  camera: /dev/video0
+  camera: 0
+  # 카메라 장착 위치.
+  #   fixed : 노트북 웹캠·고정 마스트처럼 로봇이 움직여도 시점이 그대로
+  #   robot : 로봇 머리 등 움직이는 링크. 로봇이 숙이면 화면 전체가 바뀌므로
+  #           robot_camera 섹션의 규칙으로 판정을 멈추고 다시 찾는다.
+  camera_mount: fixed
+  camera_rotate: 0        # 시계 방향 회전. 0 / 90 / 180 / 270
+  camera_mirror: true     # 좌우 반전(거울 화면)
   # 현재 레포에 포함된 lite 모델로 시작한다. full/heavy는 모델 파일을
   # 추가한 뒤 FPS와 오검출을 비교해 선택한다.
   model: lite
@@ -50,6 +57,19 @@ motion:
   # NOTE: 단위 테스트(tests/test_safety.py)는 빠른 실행을 위해
   # return_seconds=2.0, release_seconds=1.0 을 쓴다. 실환경에서는 위 값이
   # 적용된다. 테스트가 config 를 직접 읽지 않는 것은 의도적이다.
+
+# perception.camera_mount: robot 일 때만 사용한다.
+# 로봇은 시작할 때의 자세(관측 자세)에서만 사용자를 판정한다.
+#   관측 → 나쁜 자세 3초 → 과장 포즈(판정 중지, 시간 유지)
+#   → 관측 자세로 복귀 → 안정화 → 사용자 재확보 → 관측
+robot_camera:
+  intervention_hold_sec: 4.0   # 과장 포즈 유지 시간. 이 동안 사용자를 볼 수 없다
+  settle_sec: 1.0              # 관측 자세 도달 후 모터 흔들림이 멎을 때까지 대기
+  reacquire_sec: 0.7           # 연속으로 사람이 보여야 판정을 재개하는 시간
+  pose_tolerance_deg: 1.5      # 관측 자세 도달로 보는 관절 오차
+  # 복귀 후에도 나쁜 자세면 다시 sustain_seconds 를 센 뒤 재반응한다.
+  # false 면 정상 자세를 한 번 확인할 때까지 재반응하지 않는다.
+  rearm_after_reacquire: true
 
 # 교정 판단 정책. BehaviorManager 가 이 값을 읽는다.
 correction:

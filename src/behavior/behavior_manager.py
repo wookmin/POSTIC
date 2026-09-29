@@ -167,6 +167,20 @@ class BehaviorManager(threading.Thread):
                 state.last_label = (posture.label
                                     if posture is not None else "unknown")
 
+    def rearm_after_intervention(self):
+        """로봇 탑재 카메라가 개입 후 다시 사용자를 확보했을 때 호출한다.
+
+        과장 포즈를 취하는 동안 카메라는 사용자를 볼 수 없어 정상 복귀를
+        확인할 수 없다. 재확보 뒤에도 나쁜 자세가 이어지면 지속시간을
+        처음부터 다시 세어 재개입할 수 있게 한다. 반복 횟수는 유지해
+        강도 계산에 반영한다.
+        """
+        with self._policy_lock:
+            state = self._policy_state
+            state.armed = True
+            state.bad_since = None
+            state.last_label = "unknown"
+
     @staticmethod
     def _fixed_decision(posture_label: str) -> GeminiDecision:
         """자세 라벨을 고정 개입 이벤트로 바꾼다.

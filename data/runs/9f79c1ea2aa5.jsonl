@@ -1,0 +1,6 @@
+{"event": "session_started", "session_id": "9f79c1ea2aa5", "condition": "posture_trigger", "timestamp": "2026-09-28T17:13:22.874257+00:00", "elapsed_sec": 0.0}
+{"event": "intervention", "session_id": "9f79c1ea2aa5", "condition": "posture_trigger", "timestamp": "2026-09-28T17:14:12.221855+00:00", "elapsed_sec": 49.3462, "posture": "forward_head", "behavior": "bad_posture"}
+{"event": "posture_corrected", "session_id": "9f79c1ea2aa5", "condition": "posture_trigger", "timestamp": "2026-09-28T17:14:16.417190+00:00", "elapsed_sec": 53.5266, "response_time_sec": 4.1804}
+{"event": "posture_maintenance", "session_id": "9f79c1ea2aa5", "condition": "posture_trigger", "timestamp": "2026-09-28T17:14:17.758471+00:00", "elapsed_sec": 54.8659, "good_duration_sec": 1.3393, "observation_complete": true}
+{"event": "safe_stop", "session_id": "9f79c1ea2aa5", "condition": "posture_trigger", "timestamp": "2026-09-28T17:14:20.769591+00:00", "elapsed_sec": 57.8946, "reason": "control_error: ID 9 토크 해제: [RxPacketError] Hardware error occurred. Check the error at Control Table (Hardware Error Status)!"}
+{"event": "session_finished", "session_id": "9f79c1ea2aa5", "condition": "posture_trigger", "timestamp": "2026-09-28T17:14:21.787361+00:00", "elapsed_sec": 58.9122}

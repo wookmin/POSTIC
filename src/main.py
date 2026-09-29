@@ -43,8 +43,10 @@ from src.robot.joint_mapper import JointMapper, MappingError  # noqa: E402
 from src.robot.joint_writer import JointWriter, WriterError  # noqa: E402
 from src.behavior.behavior_manager import BehaviorManager
 from src.behavior.executor import BehaviorExecutor  # noqa: E402
+from src.perception.robot_camera import ReacquireGate  # noqa: E402
 from src.safety.supervisor import (  # noqa: E402
-    STATE_IDLE, STATE_RETURNING, STATE_SAFE_STOP, STATE_TRACKING, IdlePolicy,
+    STATE_IDLE, STATE_RETURNING, STATE_SAFE_STOP, STATE_TRACKING, TICKS_PER_DEG,
+    IdlePolicy,
 )
 from src.safety.gate import SafetyGate  # noqa: E402
 from src.safety.health import HealthMonitor, SafeStopRequested  # noqa: E402
@@ -53,6 +55,21 @@ from src.telemetry.event_log import EventLogger  # noqa: E402
 from src.telemetry.response_tracker import ResponseTracker  # noqa: E402
 
 POSTURE_CONFIG = PROJECT_ROOT / "config" / "posture.yaml"
+
+# 로봇 탑재 카메라의 시점 상태. OBSERVING 에서만 카메라 프레임으로 자세를
+# 판정한다. 나머지 상태에서는 화면 변화가 로봇 자신의 움직임 때문이다.
+PHASE_OBSERVING = "observing"
+PHASE_INTERVENING = "intervening"
+PHASE_RETURNING = "returning"
+PHASE_SETTLING = "settling"
+
+MAX_BLIND_HOLD_SEC = 30.0
+
+
+def is_robot_camera(config):
+    """카메라가 로봇의 움직이는 링크에 달려 있는지."""
+    perception = config.get("perception") or {}
+    return perception.get("camera_mount", "fixed") == "robot"
 
 
 def load_posture_config(path=POSTURE_CONFIG):
@@ -100,11 +117,41 @@ class ControlLoop(threading.Thread):
         self._behavior_release_sec = motion["idle_release_sec"]
         self._behavior_released = False
 
+        # 로봇 탑재 카메라: 로봇이 움직이면 카메라 시점도 바뀐다.
+        self.robot_camera = is_robot_camera(config)
+        robot_camera = config.get("robot_camera") or {}
+        self._settle_sec = float(robot_camera.get("settle_sec", 1.0))
+        self._blind_hold_sec = float(
+            robot_camera.get("intervention_hold_sec", 4.0))
+        if not 0.0 < self._blind_hold_sec <= MAX_BLIND_HOLD_SEC:
+            raise ValueError(
+                "robot_camera.intervention_hold_sec 는 0 초과 "
+                f"{MAX_BLIND_HOLD_SEC:.0f}초 이하여야 합니다")
+        self._pose_tolerance_ticks = (
+            float(robot_camera.get("pose_tolerance_deg", 1.5)) * TICKS_PER_DEG)
+        self.perception_phase = (PHASE_SETTLING if self.robot_camera
+                                 else PHASE_OBSERVING)
+        self._observe_pose_since = None
+
+    @property
+    def perception_ready(self):
+        """지금 카메라 프레임으로 사용자 자세를 판정해도 되는지."""
+        return self.perception_phase == PHASE_OBSERVING
+
     def submit_behavior(self, action):
         """고정된 행동을 다음 제어 tick부터 재생한다."""
         if action is None:
             return False
         with self._behavior_lock:
+            if (self.robot_camera
+                    and self.perception_phase != PHASE_OBSERVING):
+                # 관측 자세가 아닐 때 판정된 이벤트는 신뢰할 수 없다.
+                return False
+            if self.robot_camera:
+                # 다음 프레임부터 바로 판정을 멈추도록 제어 tick 을
+                # 기다리지 않고 상태를 바꾼다.
+                self.perception_phase = PHASE_INTERVENING
+                self._observe_pose_since = None
             self._behavior_action = action
             self._behavior_started_at = time.monotonic()
             self._behavior_returning = False
@@ -132,8 +179,14 @@ class ControlLoop(threading.Thread):
                 return None
             # posture_trigger의 과장 포즈는 사용자가 정상 자세로 돌아올
             # 때까지 유지한다. mirror 등 기존 행동은 기존 duration을 쓴다.
-            if (not getattr(action, "hold_until_good", False)
-                    and now - started >= action.duration_sec):
+            hold_until_good = getattr(action, "hold_until_good", False)
+            duration = action.duration_sec
+            if hold_until_good and self.robot_camera:
+                # 카메라가 로봇과 함께 숙여져 정상 복귀를 확인할 수 없다.
+                # 정해진 시간만 유지하고 관측 자세로 돌아가 다시 본다.
+                hold_until_good = False
+                duration = self._blind_hold_sec
+            if not hold_until_good and now - started >= duration:
                 self._behavior_action = None
                 self._behavior_started_at = None
                 self._behavior_returning = True
@@ -154,6 +207,50 @@ class ControlLoop(threading.Thread):
         return all(
             abs(self.commanded.get(name, value) - value) <= 15
             for name, value in self.neutral.items())
+
+    def _at_observe_pose(self):
+        return all(
+            abs(self.commanded.get(name, value) - value)
+            <= self._pose_tolerance_ticks
+            for name, value in self._rest_targets.items())
+
+    def _robot_camera_output(self, now):
+        """로봇 탑재 카메라용 반응 목표와 토크 상태.
+
+        과장 포즈와 복귀 중에는 카메라가 사용자를 볼 수 없으므로 관측값으로
+        동작을 취소하지 않는다. 항상 시작 자세(관측 자세)로 돌아가 같은
+        시점에서 다시 판정한다. 관측 자세에서도 토크를 유지한다. 토크를
+        풀면 컬럼이 자중으로 처지면서 카메라 시점이 바뀐다.
+        """
+        behavior_pose = self._behavior_pose(now)
+        if behavior_pose is not None:
+            return self.mapper.to_targets(behavior_pose), True
+        with self._behavior_lock:
+            self._behavior_returning = False
+            self._behavior_return_started_at = None
+        return dict(self._rest_targets), True
+
+    def _update_perception_phase(self, now):
+        """이번 tick 의 로봇 상태로 카메라 판정 가능 여부를 갱신한다."""
+        if not self.robot_camera:
+            return
+        with self._behavior_lock:
+            if self._behavior_action is not None:
+                self.perception_phase = PHASE_INTERVENING
+                self._observe_pose_since = None
+                return
+            if not self._at_observe_pose():
+                self.perception_phase = PHASE_RETURNING
+                self._observe_pose_since = None
+                return
+            # commanded 가 관측 자세에 도달해도 실제 모터는 프로파일 속도
+            # 때문에 늦게 도착하고 흔들림이 남는다. settle_sec 만큼 기다린다.
+            if self._observe_pose_since is None:
+                self._observe_pose_since = now
+            self.perception_phase = (
+                PHASE_OBSERVING
+                if now - self._observe_pose_since >= self._settle_sec
+                else PHASE_SETTLING)
 
     def _posture_trigger_output(self, now, person_visible, state,
                                 posture_label="unknown"):
@@ -234,7 +331,9 @@ class ControlLoop(threading.Thread):
                                                self.commanded, self.neutral)
             self.state = state
 
-            if self.condition == "posture_trigger":
+            if self.condition == "posture_trigger" and self.robot_camera:
+                desired, torque_enabled = self._robot_camera_output(now)
+            elif self.condition == "posture_trigger":
                 desired, torque_enabled = self._posture_trigger_output(
                     now, person_visible, state, posture_label)
             elif self.motion_enabled:
@@ -261,6 +360,7 @@ class ControlLoop(threading.Thread):
             limited = self.safety_gate.limit_targets(self.commanded, desired)
             self.commanded = limited
             self.last_targets = limited
+            self._update_perception_phase(now)
 
             if self.writer is not None and self.motion_enabled:
                 if not torque_enabled:
@@ -334,7 +434,9 @@ def print_status_line(now, status_mark, control, measured, played, fps,
         if played and played.valid else "대기                 ")
     targets = control.last_targets
     played_label = "관측" if condition == "posture_trigger" else "재생"
-    print(f"[{control.state:<9}] fps {fps:4.1f} | "
+    camera_text = (f"카메라 {control.perception_phase:<11} | "
+                   if getattr(control, "robot_camera", False) else "")
+    print(f"[{control.state:<9}] fps {fps:4.1f} | {camera_text}"
           f"측정 {measured_text} | {played_label} {played_text} | "
           f"목표 {targets}", flush=True)
     return now
@@ -359,6 +461,8 @@ def draw_preview(frame, control, measured, played, echo, angles_config,
          if played and played.valid else f"{played_label}  대기"),
         "모터  " + ("구동" if writer else "dry-run"),
     ]
+    if getattr(control, "robot_camera", False):
+        lines.append(f"카메라  {control.perception_phase}")
     draw_overlay(frame, lines)
     if measured:
         draw_angle_bar(frame, "torso", measured.torso_pitch_deg,
@@ -395,6 +499,19 @@ def run(args):
     if args.move and condition == "voice":
         sys.exit("voice 조건에서는 모터를 구동할 수 없습니다. "
                  "--move 를 빼고 실행하세요.")
+
+    robot_camera = is_robot_camera(config)
+    robot_camera_config = config.get("robot_camera") or {}
+    if robot_camera and args.move and condition == "mirror":
+        # 미러링은 매 프레임 로봇을 움직이고, 그 움직임이 곧 카메라 시점
+        # 변화가 되어 자기 자신을 따라 하는 피드백 루프가 생긴다.
+        sys.exit("로봇 탑재 카메라(camera_mount: robot)에서는 mirror 조건으로 "
+                 "모터를 구동할 수 없습니다.")
+    reacquire_gate = (
+        ReacquireGate(robot_camera_config.get("reacquire_sec", 0.7))
+        if robot_camera else None)
+    rearm_after_reacquire = bool(
+        robot_camera_config.get("rearm_after_reacquire", True))
 
     calibration_samples = []
     calibration_deadline = None
@@ -461,7 +578,10 @@ def run(args):
         source = args.camera or perception.get("camera",
                                                perception.get("camera_index", 0))
         with CameraStream(source, perception["width"],
-                          perception["height"]) as camera, \
+                          perception["height"],
+                          rotate=perception.get("camera_rotate", 0),
+                          mirror=perception.get("camera_mirror", True)
+                          ) as camera, \
                 PoseEstimator(args.model
                               or perception.get("model")) as estimator:
             if args.calibrate:
@@ -471,6 +591,9 @@ def run(args):
                 calibration_deadline = time.monotonic() + 3.0
             else:
                 print("자세 반응 시작. 프리뷰 창에서 q 또는 Esc 로 종료합니다.")
+                if robot_camera:
+                    print("로봇 탑재 카메라 모드. 로봇이 시작 자세(관측 자세)에 "
+                          "멈춰 있을 때만 자세를 판정합니다.")
                 if reference is None:
                     print("사용자별 캘리브레이션 없이 실행합니다. "
                           "카메라 위치를 고정하고 오검출을 확인하세요.")
@@ -496,6 +619,9 @@ def run(args):
                 landmarks, world = estimator.detect(frame,
                                                     (now - start) * 1000.0)
 
+                # 제어 스레드가 바꾸는 값이라 프레임마다 한 번만 읽는다.
+                robot_ready = control.perception_ready
+
                 measured = None
                 if landmarks and world:
                     measured = extract_angles(
@@ -505,6 +631,11 @@ def run(args):
                         perception["invert_neck"])
 
                 raw = measured
+                if not robot_ready:
+                    # 로봇이 움직이거나 막 멈춘 프레임은 사용자 자세와 시점
+                    # 변화를 구분할 수 없다. 필터에도 넣지 않아 움직이기 전후
+                    # 프레임이 한 흐름으로 섞이지 않게 한다.
+                    measured = None
                 if measured is not None:
                     # 순서가 중요하다. 중앙값으로 튀는 값을 먼저 버리고,
                     # 기준값을 빼서 편향을 없앤 뒤, 자르고 부드럽게 한다.
@@ -517,11 +648,22 @@ def run(args):
                                       angles_config["smoothing_alpha"],
                                       angles_config.get("neck_smoothing_alpha"))
                     previous = measured
-                    buffer.push(measured)
                 else:
                     previous = None
                     median.reset()
-                    buffer.push(PostureAngles(now, 0.0, 0.0, 0.0))
+
+                usable = True
+                if reacquire_gate is not None:
+                    usable, reacquired = reacquire_gate.update(
+                        now, robot_ready, measured is not None)
+                    if reacquired:
+                        print("[카메라] 사용자 재확보, 자세 판정 재개")
+                        if behavior is not None and rearm_after_reacquire:
+                            behavior.rearm_after_intervention()
+                    if not usable:
+                        # 재확보 중에는 필터만 채우고 판정에는 쓰지 않는다.
+                        measured = None
+                buffer.push(measured or PostureAngles(now, 0.0, 0.0, 0.0))
 
                 # 교정 판단 스레드에는 인식 실패도 unknown으로 전달한다.
                 # 실패 프레임을 생략하면 이전 나쁜 자세가 보이지 않은
@@ -571,20 +713,25 @@ def run(args):
                                         posture=event.posture_label,
                                         behavior=action.behavior,
                                     )
-                                elif not delivered and event_logger is not None:
-                                    event_logger.record(
-                                        "intervention_skipped",
-                                        timestamp=time.monotonic(),
-                                        posture=event.posture_label,
-                                        reason="delivery_failed",
-                                    )
+                                elif not delivered:
+                                    if event_logger is not None:
+                                        event_logger.record(
+                                            "intervention_skipped",
+                                            timestamp=time.monotonic(),
+                                            posture=event.posture_label,
+                                            reason="delivery_failed",
+                                        )
+                                    # 제어 루프가 거부한 이벤트(예: 로봇 카메라
+                                    # 안정화 중)는 실제 개입이 아니다.
+                                    behavior.rearm_after_skipped_event()
                             else:
                                 # 실행기가 행동을 만들지 못한 경우도 실제
                                 # 개입이 아니므로 다음 감지를 허용한다.
                                 behavior.rearm_after_skipped_event()
                         else:
                             if event_logger is not None:
-                                reason = ("person_lost" if not observed.valid
+                                reason = ("robot_camera_blind" if not usable
+                                          else "person_lost" if not observed.valid
                                           else "posture_changed" if
                                           current_posture.label != event.posture_label
                                           else "event_expired")
@@ -603,7 +750,8 @@ def run(args):
                               f"(행동: {action_name}, 강도: {event.urgency})")
 
                 if calibration_deadline is not None:
-                    if raw is not None:
+                    # 로봇 탑재 카메라는 관측 자세에서 잰 값만 기준값으로 쓴다.
+                    if raw is not None and usable:
                         calibration_samples.append(raw)
                     if now >= calibration_deadline:
                         if len(calibration_samples) < 10:
