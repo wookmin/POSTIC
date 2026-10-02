@@ -54,3 +54,19 @@ good
 - good 확정: posture_recovered
 - 재발: posture_relapsed
 - 관측 중단: observation_lost 또는 intervention_observation_lost
+
+## 반복 개입 상태
+
+자세가 회복된 뒤 즉시 다시 개입할 수 있게 두면 사용자는 로봇을 쉽게 무시하게 된다. 향후 정책은 다음 상태를 추가한다.
+
+~~~text
+posture_recovered
+  -> cooldown
+  -> armed
+
+반복 bad
+  -> cooldown 연장
+  -> 필요하면 session 단위 억제
+~~~
+
+cooldown과 억제 여부는 단순 횟수뿐 아니라 최근 개입 후 회복 시간, 사용자가 개입을 무시한 횟수, 작업 중인지에 대한 proxy, 세션 경과 시간을 함께 사용한다. 이 정책은 baseline의 3초 trigger와 분리된 실험 변수로 로그에 남긴다.

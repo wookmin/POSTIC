@@ -56,6 +56,20 @@
 - unknown 시간과 개입 판단 중단 횟수
 - safe_stop 횟수와 원인
 
+자유축·표현 동작을 도입할 때는 다음 필드도 기록한다.
+
+- robot_profile
+- motion_profile
+- intervention_index
+- time_since_last_intervention_sec
+- cooldown_level
+- suppression_reason
+- user_activity_proxy
+- trajectory_started
+- trajectory_completed
+- trajectory_cancelled
+- actual_joint_error
+
 주의할 점은 intervention이 물리적으로 사람이 로봇을 보고 반응했다는 뜻이 아니라, 현재 코드에서 출력 큐가 명령을 수락했다는 뜻이라는 것이다. 실제 모터 도달과 하드웨어 오류는 별도 텔레메트리로 보강해야 한다.
 
 ## 4. 로그 사용법
@@ -88,3 +102,5 @@ python scripts/summarize_posture_logs.py \
 - 한 조건만 반복하면 3초가 최적인지 비교할 수 없다.
 
 따라서 현재 단계에서는 3초를 고정하고, 로그로 효과 측정 구조를 먼저 검증한다. 1초·3초·5초 비교는 이벤트 스키마가 안정된 뒤 별도 실험으로 진행한다.
+
+외부 HRI 연구에서도 사용자의 작업을 언제 방해할 수 있는지를 고려하는 interruptibility가 로봇의 수행과 사회적 평가에 영향을 주는 것으로 보고된다. Notifyi에서는 초기 proxy로 키보드·마우스 활동, 최근 개입을 무시했는지, 직전 개입 후 회복했는지를 기록하고, 나중에 실제 작업 상태 센서로 교체한다.

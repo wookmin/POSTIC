@@ -90,3 +90,23 @@ USB 카메라
 | locomotion | 미구현 | 바퀴·모터 드라이버 |
 
 각 행동은 요청, 실행 시작, 완료, 실패, 취소를 별도로 반환해야 한다. 판단 모듈이 모터 버스에 직접 접근하지 않는 구조를 유지한다.
+
+## 7. 자유축 구조로 확장할 때의 경계
+
+현재 5개 pitch 관절 구조는 legacy_5dof 프로파일로 취급한다. 모터 수가 늘거나 축 방향이 바뀌면 기존 관절 이름과 tick 매핑을 재사용하지 않고, 로봇 프로파일을 새로 정의한다.
+
+향후 자유축 구조의 흐름은 다음과 같다.
+
+~~~text
+사용자 자세 feature
+  -> 의미 기반 행동
+  -> PosePlanner
+  -> MotionPrimitive / keyframe trajectory
+  -> RobotModel / JointGroup
+  -> 관절별 SafetyGate
+  -> 모터 그룹 출력
+~~~
+
+행동 요청에는 목표 포즈만 두지 않고 approach, emphasis, hold, recovery, speed, pause, entry, exit를 포함한다. 이를 통해 같은 자세 피드백이라도 관절 수와 기구 배치가 달라져도 표현 강도와 복귀 동작을 조정할 수 있다.
+
+새 프로파일이 확정되기 전까지는 현재 posture_trigger와 고정 모션을 기준선으로 유지한다. 새 동작은 adaptive_mirror 또는 expressive_mirror처럼 별도 프로파일과 로그 이름으로 추가해 기준선 실험과 섞이지 않게 한다.

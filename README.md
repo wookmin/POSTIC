@@ -124,6 +124,8 @@ python scripts/summarize_posture_logs.py \
 - 초기화와 복구의 현재 상태: docs/INITIALIZATION_AND_RECOVERY.md
 - LeRobot 참고와 적용 범위: docs/LEROBOT_INTEGRATION.md
 - 의사결정 기록: docs/decisions/
+- 탁상용 로봇 벤치마크: docs/BENCHMARK_DESKTOP_ROBOTS.md
+- 공학·디자인 설계 조사: docs/DESKTOP_ROBOT_DESIGN_RESEARCH.md
 
 ## 개발 원칙
 

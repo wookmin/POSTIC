@@ -79,3 +79,18 @@ git diff --check
 ~~~
 
 실제 모터를 움직이는 설정 변경은 소프트웨어 테스트만으로 승인하지 않는다. 하드웨어 단일 관절 시험이 필요하다.
+
+## 로봇 프로파일 확장
+
+모터 수와 자유축이 달라지면 하나의 joints.yaml을 계속 확장하지 않고 로봇 프로파일을 분리한다.
+
+~~~text
+config/robots/
+  notifyi_legacy_5dof.yaml
+  notifyi_free_axis.yaml
+config/motions/
+  posture_trigger/
+  adaptive_mirror/
+~~~
+
+free_axis 프로파일에는 관절 ID만 나열하지 말고 축, 관절 그룹, 부모·자식 관계, 허용 동작, 충돌 제한, 케이블 비틀림 제한을 함께 기록한다. 실제 ID와 위치 한계가 확정되기 전에는 예시값을 운용 설정으로 사용하지 않는다.
