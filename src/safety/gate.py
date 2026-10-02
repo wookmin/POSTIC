@@ -43,11 +43,15 @@ class SafetyGate:
         self.max_step_ticks = self.max_step_deg * TICKS_PER_DEG
         self.limiter = SlewLimiter(self.max_step_ticks)
 
-        self.max_torso_deg = float(
-            angles.get("max_torso_pitch_deg", 30.0))
-        self.max_neck_deg = float(
-            angles.get("max_neck_pitch_deg", 25.0))
-        if self.max_torso_deg < 0 or self.max_neck_deg < 0:
+        self.max_angles = {
+            "torso_pitch": float(angles.get("max_torso_pitch_deg", 30.0)),
+            "torso_yaw": float(angles.get("max_torso_yaw_deg", 30.0)),
+            "torso_roll": float(angles.get("max_torso_roll_deg", 30.0)),
+            "neck_pitch": float(angles.get("max_neck_pitch_deg", 25.0)),
+            "neck_yaw": float(angles.get("max_neck_yaw_deg", 25.0)),
+            "neck_roll": float(angles.get("max_neck_roll_deg", 25.0)),
+        }
+        if any(value < 0 for value in self.max_angles.values()):
             raise SafetyViolation("각도 안전 범위는 0 이상이어야 합니다")
         self.max_behavior_duration_sec = float(
             motion.get("behavior_max_duration_sec", 1.5))
@@ -58,16 +62,25 @@ class SafetyGate:
         """행동용 자세를 각도 안전 범위 안으로 제한한다."""
         if not pose.valid:
             raise SafetyViolation("유효하지 않은 자세는 행동으로 실행할 수 없습니다")
-        if not all(math.isfinite(value) for value in (
-                pose.torso_pitch_deg, pose.neck_pitch_deg)):
+        fields = (
+            "torso_pitch_deg", "torso_yaw_deg", "torso_roll_deg",
+            "neck_pitch_deg", "neck_yaw_deg", "neck_roll_deg",
+        )
+        if not all(math.isfinite(getattr(pose, field)) for field in fields):
             raise SafetyViolation("자세 각도에 유한하지 않은 값이 있습니다")
+        limited = {}
+        for field in fields:
+            limit = self.max_angles[field[:-4]]
+            limited[field] = max(-limit, min(limit, getattr(pose, field)))
         return PostureAngles(
             timestamp=pose.timestamp,
-            torso_pitch_deg=max(-self.max_torso_deg,
-                                min(self.max_torso_deg, pose.torso_pitch_deg)),
-            neck_pitch_deg=max(-self.max_neck_deg,
-                               min(self.max_neck_deg, pose.neck_pitch_deg)),
+            torso_pitch_deg=limited["torso_pitch_deg"],
+            neck_pitch_deg=limited["neck_pitch_deg"],
             confidence=pose.confidence,
+            torso_yaw_deg=limited["torso_yaw_deg"],
+            torso_roll_deg=limited["torso_roll_deg"],
+            neck_yaw_deg=limited["neck_yaw_deg"],
+            neck_roll_deg=limited["neck_roll_deg"],
         )
 
     def clamp_duration(self, duration_sec: float) -> float:
@@ -91,11 +104,22 @@ class SafetyGate:
         for name, target in targets.items():
             if not isinstance(target, (int, float)) or not math.isfinite(target):
                 raise SafetyViolation(f"{name} 목표 tick이 유효하지 않습니다: {target!r}")
-            spec = self.mapper.joints[name]
-            bounded[name] = int(round(max(spec["min_position"],
-                                          min(spec["max_position"], target))))
+            bounded[name] = self.mapper.clamp_target(name, target)
         return bounded
 
     def limit_targets(self, current: dict, targets: dict) -> dict:
         """관절 한계와 제어 주기당 변화량을 모두 적용한다."""
-        return self.limiter.apply(current, self.clamp_targets(targets))
+        bounded = self.clamp_targets(targets)
+        limited = {}
+        for name, target in bounded.items():
+            if name not in current:
+                limited[name] = target
+                continue
+            delta = self.mapper.position_delta(name, current[name], target)
+            if delta > self.max_step_ticks:
+                delta = self.max_step_ticks
+            elif delta < -self.max_step_ticks:
+                delta = -self.max_step_ticks
+            limited[name] = self.mapper.normalize_position(
+                name, current[name] + delta)
+        return limited

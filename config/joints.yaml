@@ -1,96 +1,97 @@
-# 관절 매핑과 가동범위.
+# Notifyi 6축 관절 매핑.
 #
-# 2XL430-W250 유닛 5개를 세로로 적층한 단일 컬럼. 유닛마다 축이 2개지만
-# 구조에 물려 있는 것은 하나뿐이라 실제 자유도는 5다.
-# 모든 축이 같은 평면에서 앞뒤(pitch)로만 굽는다.
+# 현재 측정된 정상 기준 위치를 zero_position으로 사용한다. ID 1과 8은
+# 버스에는 연결되어 있지만 유휴 모터라 이 파일의 joints에는 포함하지 않는다.
 #
-# 한계는 두 겹이다.
-#   min_position / max_position   운용(소프트) 한계. 코드가 지킨다.
-#   mechanical_min / mechanical_max  백드라이브로 측정한 기계적 한계.
-#                                    EEPROM 에 구워 최후 방어선으로 쓴다.
-#
-# 운용 한계를 기계적 한계보다 훨씬 좁게 잡은 이유:
-#   1. 사람의 흉요추 시상면 굴곡은 전체 합쳐 60~70도다. 4축에 ±20도씩만 줘도
-#      합계 80도로 이미 사람보다 넓다. 축당 ±90도는 물리적 의미가 없다.
-#   2. 5축이 각자 ±90도면 컬럼이 접혀 자기충돌한다.
-#   3. 굽힘각이 커질수록 모멘트 팔이 길어진다. 베이스는 위쪽 4단 전체를 이고
-#      있어 각도에 특히 민감하고, 실제로 과부하(0x20)로 한 번 죽었다.
-#      그래서 베이스만 ±15도로 더 좁다.
-#
-# 1도 = 11.378 ticks (4096 / 360)
+# 아직 각 모터의 + 방향과 기계적 한계를 확정하지 않았으므로, 초기 통합
+# 테스트는 zero 기준 ±12도 안에서만 허용한다. 실제 방향을 확인한 뒤
+# direction과 상대 범위를 조정한다.
 
 structure:
-  dof: pitch_only
-  active_dof: 5
+  dof: pitch_yaw_roll
+  active_dof: 6
   units:
-    - {index: 1, driven: 1,  idle: 2,  role: load}
-    - {index: 2, driven: 4,  idle: 3,  role: load}
-    - {index: 3, driven: 5,  idle: 6,  role: spine}
-    - {index: 4, driven: 8,  idle: 7,  role: spine}
-    - {index: 5, driven: 9,  idle: 10, role: neck}
+    - {index: 1, driven: 2, axis: yaw, role: waist_lower}
+    - {index: 2, driven: 3, axis: pitch, role: waist_lower}
+    - {index: 3, driven: 4, axis: yaw, role: waist_upper}
+    - {index: 4, driven: 5, axis: pitch, role: waist_upper}
+    - {index: 5, driven: 6, axis: roll, role: neck_base}
+    - {index: 6, driven: 7, axis: yaw, role: neck}
 
 joints:
-  base_pitch:
-    id: 1
-    unit: 1
-    role: load
-    direction: 1              # +1 이면 tick 증가가 앞으로 숙임
-    zero_position: 2033
-    min_position: 1862        # -15도
-    max_position: 2204        # +15도
-    mechanical_min: 1007
-    mechanical_max: 3060
+  waist_lower_yaw:
+    id: 2
+    group: torso
+    input_axis: torso_yaw
+    direction: 1              # 실제 좌우 방향 테스트 후 -1/1 확정
+    zero_position: 1042
+    min_position: 0
+    max_position: 4095
+    relative_min_deg: -12
+    relative_max_deg: 12
+    wrap_position: true
 
-  waist_pitch:
+  waist_lower_pitch:
+    id: 3
+    group: torso
+    input_axis: torso_pitch
+    direction: 1              # 실제 앞/뒤 방향 테스트 후 -1/1 확정
+    zero_position: 3042
+    min_position: 0
+    max_position: 4095
+    relative_min_deg: -12
+    relative_max_deg: 12
+    wrap_position: true
+
+  waist_upper_yaw:
     id: 4
-    unit: 2
-    role: load
-    direction: 1              # +1 이면 tick 증가가 앞으로 숙임
-    zero_position: 2041
-    min_position: 1813        # -20도
-    max_position: 2269        # +20도
-    mechanical_min: 1006
-    mechanical_max: 3077
+    group: torso
+    input_axis: torso_yaw
+    direction: 1
+    zero_position: 2060
+    min_position: 0
+    max_position: 4095
+    relative_min_deg: -12
+    relative_max_deg: 12
+    wrap_position: true
 
-  spine_lower_pitch:
+  waist_upper_pitch:
     id: 5
-    unit: 3
-    role: spine
-    direction: 1              # +1 이면 tick 증가가 앞으로 숙임
-    zero_position: 2044
-    min_position: 1816        # -20도
-    max_position: 2272        # +20도
-    mechanical_min: 1014
-    mechanical_max: 3074
+    group: torso
+    input_axis: torso_pitch
+    direction: 1
+    zero_position: 59
+    min_position: 0
+    max_position: 4095
+    relative_min_deg: -12
+    relative_max_deg: 12
+    wrap_position: true
 
-  spine_upper_pitch:
-    id: 8
-    unit: 4
-    role: spine
-    direction: -1             # 이 축은 tick 감소가 앞으로 숙임
-    zero_position: 2046
-    min_position: 1818        # -20도
-    max_position: 2274        # +20도
-    mechanical_min: 1016
-    mechanical_max: 3076
-
-  # 목은 원위치가 4042 라 ±35도 범위(±398)가 4440 까지 가서 0/4095 경계를 넘는다.
-  # Homing Offset 으로 옮기는데, 이 펌웨어는 위치 제어 모드에서 오프셋을
-  # ±1024 ticks 로 제한한다(-1024 는 적용, -1025 는 조용히 무시). 그래서 중립을
-  # 2048 로 옮길 수 없고, 최대치 -1024 를 걸어 3018 을 중립으로 삼는다.
-  # 중립이 2048 일 필요는 없다. 가동 범위가 0~4095 안에 들어가기만 하면 된다.
-  # mechanical_* 는 재측정 전까지 보수적으로 잡아둔 잠정값이다.
-  neck_pitch:
-    id: 9
-    unit: 5
+  neck_roll:
+    id: 6
+    group: neck
     role: neck
-    direction: 1              # +1 이면 tick 증가가 앞으로 숙임
-    homing_offset: -1024
-    zero_position: 3018
-    min_position: 2620        # -35도
-    max_position: 3416        # +35도
-    mechanical_min: 2418      # 잠정. teach_limits 로 재측정 필요
-    mechanical_max: 3618
+    input_axis: neck_roll
+    direction: 1
+    zero_position: 4087
+    min_position: 0
+    max_position: 4095
+    relative_min_deg: -12
+    relative_max_deg: 12
+    wrap_position: true
+
+  neck_yaw:
+    id: 7
+    group: neck
+    role: neck
+    input_axis: neck_yaw
+    direction: 1
+    zero_position: 3039
+    min_position: 0
+    max_position: 4095
+    relative_min_deg: -12
+    relative_max_deg: 12
+    wrap_position: true
 
 unsupported_behaviors:
-  - mimic_tilted_shoulders
+  - direct_user_pose_mirroring_for_yaw_roll

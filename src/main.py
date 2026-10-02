@@ -72,9 +72,13 @@ class ControlLoop(threading.Thread):
         self.writer = writer
         self.period = 1.0 / echo["control_hz"]
         self.safety_gate = safety_gate or SafetyGate(mapper, config)
+        distance_fn = getattr(self.mapper, "position_delta", None)
+        if distance_fn is None:
+            distance_fn = lambda name, current, target: target - current
         self.policy = IdlePolicy(
             motion["return_to_neutral_sec"], motion["idle_release_sec"],
-            grace_seconds=motion.get("person_lost_grace_sec", 0.5))
+            grace_seconds=motion.get("person_lost_grace_sec", 0.5),
+            distance_fn=distance_fn)
         self.neutral = mapper.neutral_targets()
         self._rest_targets = dict(self.neutral)
         self.stop_event = threading.Event()
@@ -179,8 +183,11 @@ class ControlLoop(threading.Thread):
                 self._behavior_return_started_at = now
 
     def _at_neutral(self):
+        distance_fn = getattr(self.mapper, "position_delta", None)
+        if distance_fn is None:
+            distance_fn = lambda name, current, target: target - current
         return all(
-            abs(self.commanded.get(name, value) - value) <= 15
+            abs(distance_fn(name, self.commanded.get(name, value), value)) <= 15
             for name, value in self.neutral.items())
 
     def _posture_trigger_output(self, now, person_visible, state,
@@ -311,9 +318,9 @@ def check_pose_within_limits(writer, mapper):
     folded = []
     for name, spec in joints.items():
         position = positions.get(name)
-        if not spec["min_position"] <= position <= spec["max_position"]:
+        if not mapper.within_limits(name, position):
             folded.append(f"  {name} 현재 {position}, 운용 범위 "
-                          f"{spec['min_position']}~{spec['max_position']}")
+                          f"zero 기준 상대 범위 확인 필요")
     if folded:
         raise BusError("현재 자세가 운용 범위를 벗어나 있습니다.\n"
                        + "\n".join(folded)

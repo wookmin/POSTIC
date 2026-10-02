@@ -25,6 +25,10 @@ perception:
 angles:
   max_torso_pitch_deg: 60   # posture_trigger 시연용 과장 포즈 상한
   max_neck_pitch_deg: 35    # 목 관절의 현재 소프트 한계(+/-35도)
+  max_torso_yaw_deg: 30
+  max_torso_roll_deg: 30
+  max_neck_yaw_deg: 30
+  max_neck_roll_deg: 30
   median_window: 7          # 7프레임이면 스파이크 방어하면서 지연 최소화
   smoothing_alpha: 0.55     # 상체용. 0.55면 반응 빠르면서 떨림 억제
   neck_smoothing_alpha: 0.35  # 2D 비율은 Z축보다 안정적 → 적당히 반응
@@ -33,17 +37,21 @@ angles:
 # neck_pitch을 반대 방향으로 움직여 카메라가 정면을 유지하도록 한다.
 # 노트북 웹캠을 사용할 때는 실행 명령에 --no-camera-gimbal을 붙인다.
 camera_gimbal:
-  enabled: true
-  joint: neck_pitch
+  enabled: false
+  joint: neck_yaw
 
-# 상체각을 4축에 나누는 비율. 합이 1.0.
-# 베이스는 위쪽 4단 전체를 이고 있어 모멘트가 가장 크므로 가장 적게 준다.
-# 실제로 base_pitch 가 과부하(0x20)로 한 번 고장난 적이 있다.
+# 각 입력 축을 실제 관절에 분배한다. 각 묶음의 합은 1.0이어야 한다.
 distribution:
-  base_pitch: 0.15
-  waist_pitch: 0.25
-  spine_lower_pitch: 0.30
-  spine_upper_pitch: 0.30
+  torso_pitch:
+    waist_lower_pitch: 0.50
+    waist_upper_pitch: 0.50
+  torso_yaw:
+    waist_lower_yaw: 0.50
+    waist_upper_yaw: 0.50
+  neck_roll:
+    neck_roll: 1.0
+  neck_yaw:
+    neck_yaw: 1.0
 
 motion:
   profile_velocity: 40
@@ -103,3 +111,7 @@ intervention:
     bad_posture:
       torso_pitch_deg: 60.0
       neck_pitch_deg: 35.0
+      torso_yaw_deg: 18.0
+      torso_roll_deg: 0.0
+      neck_yaw_deg: 18.0
+      neck_roll_deg: 12.0

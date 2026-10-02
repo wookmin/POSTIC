@@ -11,6 +11,8 @@ except ImportError:  # dry-run과 하드웨어 없는 테스트는 SDK 없이도
     GroupSyncWrite = None
 
 ADDR_TORQUE_ENABLE = 64
+ADDR_OPERATING_MODE = 11
+POSITION_CONTROL_MODE = 3
 ADDR_GOAL_POSITION = 116
 ADDR_PROFILE_ACCEL = 108
 ADDR_PROFILE_VELOCITY = 112
@@ -72,7 +74,21 @@ class JointWriter:
                               f"{self._packet.getRxPacketError(err)}")
 
     def prepare(self):
-        """프로파일 값을 안전한 값으로 낮춘다. 토크는 아직 걸지 않는다."""
+        """위치 제어 모드를 확인하고 프로파일 값을 준비한다."""
+        for name, motor_id in self._joint_ids.items():
+            mode, comm, err = self._packet.read1ByteTxRx(
+                self._port, motor_id, ADDR_OPERATING_MODE)
+            if comm != COMM_SUCCESS or err:
+                detail = (self._packet.getTxRxResult(comm)
+                          if comm != COMM_SUCCESS
+                          else self._packet.getRxPacketError(err))
+                raise WriterError(
+                    f"{name} (ID {motor_id}) 동작 모드 읽기 실패: {detail}")
+            if mode != POSITION_CONTROL_MODE:
+                raise WriterError(
+                    f"{name} (ID {motor_id})가 위치 제어 모드가 아닙니다 "
+                    f"(현재 mode={mode}). DYNAMIXEL Wizard에서 "
+                    "Position Control Mode로 변경하세요.")
         for motor_id in self._joint_ids.values():
             self._write4(motor_id, ADDR_PROFILE_ACCEL,
                          self._profile_acceleration, "Profile Acceleration")

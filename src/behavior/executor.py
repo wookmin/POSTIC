@@ -39,25 +39,35 @@ class BehaviorExecutor:
             intervention.get("action_duration_sec",
                             experiment.get("action_duration_sec", 1.0)))
         self.fixed_poses = {
-            # 몸통 각도는 4개 관절에 나뉘므로 작은 값은 실제로 거의
-            # 보이지 않는다. 기본값도 시연용 과장 포즈로 둔다.
-            "bad_posture": {"torso_pitch_deg": 60.0, "neck_pitch_deg": 35.0},
-            "slouch": {"torso_pitch_deg": 14.0, "neck_pitch_deg": 4.0},
-            "forward_head": {"torso_pitch_deg": 4.0, "neck_pitch_deg": 14.0},
+            # 새 구조에서는 pitch/yaw/roll을 독립적으로 합성한다.
+            "bad_posture": {
+                "torso_pitch_deg": 60.0, "torso_yaw_deg": 0.0,
+                "torso_roll_deg": 0.0, "neck_pitch_deg": 35.0,
+                "neck_yaw_deg": 0.0, "neck_roll_deg": 0.0,
+            },
+            "slouch": {
+                "torso_pitch_deg": 14.0, "torso_yaw_deg": 0.0,
+                "torso_roll_deg": 0.0, "neck_pitch_deg": 4.0,
+                "neck_yaw_deg": 0.0, "neck_roll_deg": 0.0,
+            },
+            "forward_head": {
+                "torso_pitch_deg": 4.0, "torso_yaw_deg": 0.0,
+                "torso_roll_deg": 0.0, "neck_pitch_deg": 14.0,
+                "neck_yaw_deg": 0.0, "neck_roll_deg": 0.0,
+            },
             "slouch_and_forward": {
-                "torso_pitch_deg": 14.0, "neck_pitch_deg": 14.0,
+                "torso_pitch_deg": 14.0, "torso_yaw_deg": 0.0,
+                "torso_roll_deg": 0.0, "neck_pitch_deg": 14.0,
+                "neck_yaw_deg": 0.0, "neck_roll_deg": 0.0,
             },
         }
         for label, values in (intervention.get("poses") or {}).items():
             if label in self.fixed_poses:
-                self.fixed_poses[label] = {
-                    "torso_pitch_deg": float(
-                        values.get("torso_pitch_deg",
-                                  self.fixed_poses[label]["torso_pitch_deg"])),
-                    "neck_pitch_deg": float(
-                        values.get("neck_pitch_deg",
-                                  self.fixed_poses[label]["neck_pitch_deg"])),
-                }
+                merged = dict(self.fixed_poses[label])
+                for field in merged:
+                    if field in values:
+                        merged[field] = float(values[field])
+                self.fixed_poses[label] = merged
         self._generic_pose_configured = (
             "bad_posture" in (intervention.get("poses") or {}))
 
@@ -81,6 +91,10 @@ class BehaviorExecutor:
             torso_pitch_deg=values["torso_pitch_deg"],
             neck_pitch_deg=values["neck_pitch_deg"],
             confidence=1.0,
+            torso_yaw_deg=values["torso_yaw_deg"],
+            torso_roll_deg=values["torso_roll_deg"],
+            neck_yaw_deg=values["neck_yaw_deg"],
+            neck_roll_deg=values["neck_roll_deg"],
         )
         return BehaviorAction(
             behavior="bad_posture" if use_generic else posture_label,

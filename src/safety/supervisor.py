@@ -54,13 +54,15 @@ class IdlePolicy:
     """
 
     def __init__(self, return_seconds, release_seconds, tolerance_ticks=15,
-                 grace_seconds=0.5):
+                 grace_seconds=0.5, distance_fn=None):
         self.return_seconds = return_seconds
         self.release_seconds = release_seconds
         self.tolerance_ticks = tolerance_ticks
         # 인식은 몇 프레임씩 끊긴다. 그때마다 중립으로 출발했다 돌아오면
         # 로봇이 덜컥거린다. 이 시간만큼 연속으로 안 보여야 복귀를 시작한다.
         self.grace_seconds = grace_seconds
+        self.distance_fn = distance_fn or (lambda name, current, target:
+                                           target - current)
         self.state = STATE_TRACKING
         self._left_at = None
         self._missing_since = None
@@ -87,7 +89,8 @@ class IdlePolicy:
 
         if self.state == STATE_RETURNING:
             at_neutral = all(
-                abs(current.get(name, value) - value) <= self.tolerance_ticks
+                abs(self.distance_fn(name, current.get(name, value), value))
+                <= self.tolerance_ticks
                 for name, value in neutral.items())
             timed_out = (self._left_at is not None
                          and now - self._left_at >= self.return_seconds)

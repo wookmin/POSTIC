@@ -112,6 +112,14 @@ def ping_all(packet, port):
     return found
 
 
+def check(comm, err, packet, what):
+    """스크립트가 공유하는 SDK 통신/모터 오류 검사."""
+    if comm != COMM_SUCCESS:
+        raise RuntimeError(f"{what}: 통신 실패 - {packet.getTxRxResult(comm)}")
+    if err:
+        raise RuntimeError(f"{what}: 모터 오류 - {packet.getRxPacketError(err)}")
+
+
 def install_signal_guards():
     """SIGTERM / SIGHUP 을 예외로 바꿔 finally 정리 코드가 반드시 돌게 한다.
 
