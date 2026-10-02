@@ -10,5 +10,8 @@ models/**/*.task
 data/logs/
 data/runs/
 data/samples/
+
+# 개인 장비·실험 메모 — 공유하지 않음
+docs/private/
 venv/
 .venv/
