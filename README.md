@@ -1,156 +1,120 @@
-# POSTIC
+# Notifyi
 
-카메라로 본 사용자의 나쁜 자세가 일정 시간 지속될 때만, 로봇이 미리 정한
-구부정한 자세를 실행하는 자세 반응 프로토타입입니다. 정상 자세에서는 로봇이
-중립 자세를 유지하며 사용자의 자세를 미러링하지 않습니다. 나쁜 자세가
-정상으로 돌아오면 중립으로 복귀하고, 이후 다시 나쁜 자세가 지속되면 다시
-반응합니다.
+탁상용 로봇 Notifyi의 자세 반응 프로토타입이다. 카메라로 사용자의 자세를 관찰하고, 나쁜 자세가 3초 지속될 때만 미리 정의한 과장 포즈를 실행한다.
 
-## 실행 구조
+## 현재 동작
 
-```text
-Camera → PoseEstimator → PostureAngles → posture classifier
-                                      ├─ normal/unknown → no motion
-                                      └─ bad posture sustained → fixed behavior
-                                                            └─ SafetyGate → JointWriter
-```
+- 정상 자세: 로봇은 시작 시점의 기준 자세를 유지하고 움직이지 않는다.
+- 나쁜 자세 3초 지속: 목·상체·어깨선 중 어느 항목이든 나쁘면 하나의 고정 bad_posture 포즈를 실행한다.
+- 개입 중: 사용자가 정상 자세로 돌아올 때까지 포즈를 유지한다.
+- 정상 복귀: 로봇이 중립으로 돌아온 뒤 토크를 해제한다.
+- 재개입: 정상 복귀 후 다시 나쁜 자세가 3초 지속되면 다시 반응한다.
+- 로그: 자세 에피소드, 개입, 회복, 관측 중단, 안전 정지를 JSONL로 저장한다.
 
-기본 `posture_trigger` 모드에서는 Gemini를 호출하지 않습니다. 로컬 분류기와
-지속시간 정책이 이벤트를 만들고, `src/behavior/executor.py`가 자세 라벨을
-설정된 고정 포즈로 변환합니다. 모든 모터 목표는
-`src/behavior/executor.py`와 `src/safety/gate.py`를 거친 뒤에만 전달됩니다.
+현재 프로토타입은 사용자 자세를 계속 따라 하는 미러링이 아니다. 정상일 때는 미러링하지 않고, 나쁜 자세에 대해서만 고정된 반응을 보여주는 구조다.
 
-## 안전 계층
+## 현재 범위와 제외 범위
 
-- `SafetyGate`: 관절 운용 범위, 제어 주기당 변화량, 행동 자세와 지속 시간을 제한
-- `HealthMonitor`: 카메라 프레임과 제어 루프 heartbeat stale 상태를 감시
-- `ControlLoop.safe_stop()`: 추적을 중지하고 종료 루틴에서 안전한 중립 자세로 복귀
-- `IdlePolicy`: 사람 이탈 시 유예 후 중립 복귀, 안정화 뒤 토크 해제
-- `BehaviorExecutor`: `posture_trigger`, `voice`, `mirror` 조건을 선택
-- `ResponseTracker`: 개입 후 반응시간·무시율·자세 유지시간을 JSONL로 기록
+현재 포함:
 
-정책은 `config/posture.yaml`의 `correction`, `intervention`, `safety` 섹션에서 관리합니다. 기존
-`motion.max_step_deg` 설정도 호환을 위해 fallback으로 지원합니다.
+- 로봇 탑재 USB 카메라 중심의 MediaPipe 자세 인식
+- 노트북 웹캠 보조 입력
+- Dynamixel 2XL430-W250 5축 pitch 컬럼 제어
+- 카메라 탑재를 고려한 neck_pitch 짐벌 보정
+- SafetyGate, slew 제한, safe stop
+- 실험 효과 평가용 JSONL 이벤트와 CSV 요약
 
-## 동작 확인
+현재 제외:
 
-```bash
-pytest -q
-python -m src.main --no-preview --no-correction
-python -m src.main --move
-```
+- 마이크·스피커·음성 안내
+- 디스플레이 표정
+- 바퀴 이동
+- ROS 2 런타임
+- Gemini 또는 기타 LLM 판단
+- 자동 초기화·복구 모드
+- 학습 기반 모터 정책
 
-기본 실행은 dry-run이며 실제 모터를 움직이려면 `--move`가 필요합니다.
+## 실행
 
-실제 모터 실행:
+가상환경을 활성화한 뒤 실행한다.
 
-```bash
-python -m src.main \
-  --no-preview \
-  --move \
-  --condition posture_trigger
-```
+~~~bash
+source .venv/bin/activate
 
-## 현재 자세 반응 동작
+# 카메라·인식만 확인하는 dry-run
+python -m src.main --no-preview
 
-`posture_trigger` 기본 동작은 다음과 같습니다.
+# 로봇 카메라와 모터를 함께 사용하는 실험
+python -m src.main --no-preview --move \
+  --condition posture_trigger \
+  --camera /dev/video0 \
+  --participant-id P01
 
-1. 정상 자세에서는 로봇이 중립 자세를 유지합니다.
-2. 목·상체·어깨선 중 하나라도 나쁜 상태가 3초 지속되면 반응합니다.
-3. 미리 정의된 하나의 과장 포즈를 실행합니다.
-4. 나쁜 자세가 유지되는 동안 과장 포즈를 유지합니다.
-5. 정상 자세가 확인되면 중립으로 복귀합니다.
-6. 다음 나쁜 자세 에피소드가 3초 지속되면 다시 반응합니다.
+# 노트북 웹캠을 사용할 때는 탑재 카메라 짐벌 보정을 끈다
+python -m src.main --no-preview --move \
+  --condition posture_trigger \
+  --camera /dev/video0 \
+  --no-camera-gimbal \
+  --participant-id P01
+~~~
 
-현재 시연용 고정 포즈는 다음과 같습니다.
+--move가 없으면 모터를 구동하지 않는다. --no-correction은 자세 개입 판단을 끄고 인식과 로그 확인에 사용할 수 있다.
 
-```text
-몸통 목표: 60도
-목 목표: 35도
-```
+## 하드웨어 매핑
 
-몸통 각도는 4개 pitch 관절에 분배됩니다. 목 50도는 현재 목 관절의
-소프트 한계가 ±35도라 실제 동작에는 사용하지 않습니다.
+| 관절 | ID | 용도 |
+| --- | ---: | --- |
+| base_pitch | 1 | 하체·상단 하중 |
+| waist_pitch | 4 | 허리 |
+| spine_lower_pitch | 5 | 척추 하단 |
+| spine_upper_pitch | 8 | 척추 상단, 방향 반전 |
+| neck_pitch | 9 | 목·카메라 짐벌 |
+| 보조축 | 2, 3, 6, 7, 10 | 현재 미사용 |
 
-## 모터 매핑
+자세와 모터의 기준값은 config/joints.yaml과 config/posture.yaml에서 관리한다. zero_position은 세워진 기준 자세의 tick이지, 어떤 누운 상태에서도 자동 복구할 수 있는 만능 원점이 아니다.
 
-현재 실제 구동 축은 `config/robot.yaml`의 `active_ids`를 기준으로 합니다.
+모터를 연결하기 전에는 다음을 먼저 확인한다.
 
-```text
-ID 1 → base_pitch
-ID 4 → waist_pitch
-ID 5 → spine_lower_pitch
-ID 8 → spine_upper_pitch, 방향 반전
-ID 9 → neck_pitch
-```
+~~~bash
+python scripts/scan_dynamixel.py --port /dev/ttyUSB0 --baud 1000000
+python scripts/check_env.py
+~~~
 
-ID 3을 포함한 나머지 축은 유휴 모터로 취급하며 일반 제어 루프에서 토크를
-인가하지 않습니다. ID 8은 실제 조립 방향에 맞춰 `direction: -1`로 설정되어
-있습니다.
+ID 누락, 속도 제어 모드, hardware error, 기계적 범위 이탈이 있으면 --move로 실행하지 않는다.
 
-## 로봇 탑재 카메라 설계
+## 로그와 효과 평가
 
-카메라는 별도 외부 장치를 사용하지 않고 로봇에 1대만 탑재하는 방향입니다.
-다만 몸통이나 목 관절에 직접 부착하지 않고, 하단 베이스에서 올라오는 고정
-마스트에 장착합니다.
+익명 참가자 ID를 함께 주면 세션 메타데이터에 기록된다.
 
-```text
-카메라
-  │
-고정 마스트
-  │
-하단 베이스 ─ 구부러지는 몸통 ─ 목 관절
-```
+~~~bash
+python scripts/summarize_posture_logs.py \
+  --input data/runs \
+  --output data/runs/summary.csv
+~~~
 
-카메라가 로봇 동작과 함께 움직이면 사용자의 자세 변화와 카메라 시점 변화를
-구분하기 어렵습니다. 향후 로봇 탑재 카메라를 사용할 때는 다음 상태를 추가할
-예정입니다.
+로그로 다음을 계산할 수 있다.
 
-```text
-OBSERVING → INTERVENING → REACQUIRING → RECOVERING
-```
+- 개입 후 정상 자세 확인까지의 시간
+- 회복률과 미완료 비율
+- 회복 후 재발까지 걸린 시간
+- 세션 전반·후반의 개입 빈도 변화
+- 관측 중단과 안전 정지 횟수
 
-로봇이 움직이는 동안에는 자세 판정을 일시정지하고, 동작이 끝난 뒤 사용자를
-다시 찾고 0.5~1초 동안 landmark 품질을 확인한 다음 복구 여부를 판단합니다.
+자세 로그의 정의와 해석상 한계는 docs/EXPERIMENT_LOGGING.md에 정리했다.
 
-자세 인식 카메라의 상세 안정화 계획은
-[`CAMERA_POSITION_STABILIZATION.md`](CAMERA_POSITION_STABILIZATION.md),
-YEGAM 전체 기획과 연구 확장안은
-[`YEGAM_posture_detection_flow.md`](YEGAM_posture_detection_flow.md)에 정리되어 있습니다.
+## 문서
 
-## 개입 조건 실험
+- 아키텍처와 현재 하드웨어: docs/ARCHITECTURE.md
+- 자세 인식과 카메라 배치: docs/PERCEPTION_AND_CAMERA.md
+- 로그 기반 효과 평가: docs/EXPERIMENT_LOGGING.md
+- 초기화와 복구의 현재 상태: docs/INITIALIZATION_AND_RECOVERY.md
+- LeRobot 참고와 적용 범위: docs/LEROBOT_INTEGRATION.md
 
-```bash
-python -m src.main --no-preview --condition posture_trigger
-python -m src.main --no-preview --condition voice
-python -m src.main --no-preview --condition mirror  # 기존 미러링 호환 모드
-```
+## 개발 원칙
 
-세션 로그는 `data/runs/<session_id>.jsonl`에 저장됩니다. 원본 영상·음성·Gemini
-대화 전문은 저장하지 않습니다. 실제 음성을 켜려면 `config/posture.yaml`의
-`audio.tts.enabled`를 `true`로 바꾸고 장치에 `espeak-ng`를 설치합니다.
-
-참가자 이름 대신 팀에서 정한 익명 코드를 붙여 실행할 수 있습니다.
-
-```bash
-python -m src.main --no-preview --condition posture_trigger --participant-id P01
-python scripts/summarize_posture_logs.py
-```
-
-요약 명령은 `data/summaries/episodes.csv`와
-`data/summaries/interventions.csv`를 만듭니다. 회복시간은 첫 `good` 판정과
-1초 안정 확인 완료 시각을 각각 기록하며, 이는 웹캠 분류 결과 기준입니다.
-개입 로그의 출력 채널은 요청이 모터 제어 큐 또는 TTS 큐에 접수됐다는 뜻이며,
-실제 물리적 동작·소리 완료를 보증하지 않습니다.
-
-현재 기본 실험 조건은 자세 반응이며, 음성 알림과 기존 미러링 모드는 호환용으로
-남아 있습니다. 디스플레이를 확보하면
-`display` 표현 기능을, 바퀴를 확보하면 `locomotion` 이동 기능을 별도 capability로
-추가할 수 있도록 행동 실행 계층을 분리해 두었습니다.
-
-## 검증 상태
-
-- 단위 테스트: 111 passed (로그 기능 추가 후 로컬 실행)
-- 기본 동작: 노트북 웹캠 기반
-- 모터 제어: Dynamixel 위치 제어 모드
-- 안전 기능: 관절 운용 범위, slew limit, 하드웨어 오류, 중립 복귀, 토크 해제
+1. 정상 자세에서는 로봇이 움직이지 않는다.
+2. 판단 모듈은 모터 packet을 직접 만들지 않는다.
+3. 모든 목표는 SafetyGate와 관절별 운용 범위를 통과한다.
+4. 사람 미검출과 카메라 이동은 정상이나 나쁜 자세로 추정하지 않는다.
+5. 실제 개입과 출력 큐 수락을 로그에서 구분한다.
+6. 새 하드웨어 기능은 현재 자세 반응 루프를 깨지 않도록 별도 행동 어댑터로 추가한다.
