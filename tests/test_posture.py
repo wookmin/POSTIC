@@ -1,4 +1,4 @@
-"""2D 비율 기반 자세 추출과 지연 버퍼 테스트. 카메라도 모터도 필요 없다."""
+"""2D 비율 기반 자세 추출 테스트. 카메라도 모터도 필요 없다."""
 
 from dataclasses import dataclass
 
@@ -6,9 +6,9 @@ import pytest
 
 from src.perception.posture_features import (
     LEFT_EAR, LEFT_HIP, LEFT_SHOULDER, NOSE, RIGHT_EAR, RIGHT_HIP,
-    RIGHT_SHOULDER, PostureAngles, clamp_angles, extract_angles, smooth,
+    RIGHT_SHOULDER, MedianFilter, PostureAngles, clamp_angles,
+    extract_angles, smooth,
 )
-from src.posture.pose_buffer import PoseBuffer
 
 
 @dataclass
@@ -166,85 +166,6 @@ class TestClampAndSmooth:
         blended = smooth(previous, current, 0.5, neck_alpha=0.1)
         assert blended.torso_pitch_deg == pytest.approx(5.0)
         assert blended.neck_pitch_deg == pytest.approx(2.0)
-
-
-class TestPoseBuffer:
-    def test_rejects_non_positive_span(self):
-        with pytest.raises(ValueError):
-            PoseBuffer(0)
-
-    def test_sample_before_first_returns_none(self):
-        buffer = PoseBuffer(5.0)
-        buffer.push(PostureAngles(10.0, 0.0, 0.0, 1.0))
-        assert buffer.sample(9.0) is None
-
-    def test_sample_after_last_returns_none(self):
-        buffer = PoseBuffer(5.0)
-        buffer.push(PostureAngles(10.0, 0.0, 0.0, 1.0))
-        assert buffer.sample(11.0) is None
-
-    def test_exact_hit(self):
-        buffer = PoseBuffer(5.0)
-        buffer.push(PostureAngles(10.0, 7.0, 3.0, 1.0))
-        got = buffer.sample(10.0)
-        assert got.torso_pitch_deg == 7.0
-
-    def test_linear_interpolation(self):
-        buffer = PoseBuffer(5.0)
-        buffer.push(PostureAngles(10.0, 0.0, 0.0, 1.0))
-        buffer.push(PostureAngles(11.0, 10.0, 20.0, 1.0))
-        got = buffer.sample(10.25)
-        assert got.torso_pitch_deg == pytest.approx(2.5)
-        assert got.neck_pitch_deg == pytest.approx(5.0)
-
-    def test_out_of_order_push_is_ignored(self):
-        buffer = PoseBuffer(5.0)
-        assert buffer.push(PostureAngles(10.0, 0.0, 0.0, 1.0)) is True
-        assert buffer.push(PostureAngles(9.0, 0.0, 0.0, 1.0)) is False
-        assert len(buffer) == 1
-
-    def test_old_samples_are_dropped(self):
-        buffer = PoseBuffer(1.0)
-        for n in range(30):
-            buffer.push(PostureAngles(10.0 + n * 0.1, 0.0, 0.0, 1.0))
-        oldest, newest = buffer.span()
-        assert newest - oldest <= 1.0 + 1e-9
-
-
-from src.perception.calibration import (
-    average_reference, load_reference, save_reference,
-)
-from src.perception.posture_features import (
-    MedianFilter, PostureReference, apply_reference,
-)
-
-
-class TestReference:
-    def test_reference_subtracts_bias(self):
-        angles = PostureAngles(1.0, 20.0, 5.0, 1.0)
-        reference = PostureReference(torso_pitch_deg=20.0, neck_pitch_deg=5.0)
-        corrected = apply_reference(angles, reference)
-        assert corrected.torso_pitch_deg == pytest.approx(0.0)
-        assert corrected.neck_pitch_deg == pytest.approx(0.0)
-
-    def test_none_reference_is_identity(self):
-        angles = PostureAngles(1.0, 20.0, 5.0, 1.0)
-        assert apply_reference(angles, None) is angles
-
-    def test_average_reference(self):
-        samples = [PostureAngles(0.0, 10.0, 2.0, 1.0),
-                   PostureAngles(1.0, 20.0, 4.0, 1.0)]
-        reference = average_reference(samples)
-        assert reference.torso_pitch_deg == pytest.approx(15.0)
-        assert reference.neck_pitch_deg == pytest.approx(3.0)
-
-    def test_save_and_load_roundtrip(self, tmp_path):
-        target = tmp_path / "calibration.yaml"
-        reference = PostureReference(19.812, -3.25)
-        save_reference(reference, samples=42, path=target)
-        loaded = load_reference(target)
-        assert loaded.torso_pitch_deg == pytest.approx(19.812)
-        assert loaded.neck_pitch_deg == pytest.approx(-3.25)
 
 
 class TestMedianFilter:

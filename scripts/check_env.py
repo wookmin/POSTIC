@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-"""카메라 · 마이크 · 모터가 한 인터프리터에서 다 되는지 확인한다.
+"""카메라 · 자세 인식 · 모터가 한 인터프리터에서 다 되는지 확인한다.
 
-예전에는 mediapipe/vosk 는 venv 에만, dynamixel_sdk 는 ROS python 에만 있어서
-자세를 보고 모터를 움직이는 조합이 불가능했다. 이 스크립트는 그 상태로 되돌아가지
-않았는지 검증한다.
+이 스크립트는 카메라 입력부터 모터 버스까지 현재 실행에 필요한 환경을 검증한다.
 
 사용법:
     ~/dynamixel-venv/bin/python scripts/check_env.py
 """
 
 import importlib
-import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -22,11 +17,6 @@ MODULES = [
     ("mediapipe", "자세 추정"),
     ("cv2", "카메라 캡처"),
     ("numpy", "수치 연산"),
-    ("vosk", "STT"),
-    ("sounddevice", "오디오 입출력"),
-    ("google.genai", "Gemini"),
-    ("pydantic", "스키마 검증"),
-    ("dotenv", "환경변수"),
     ("yaml", "설정 로딩"),
     ("dynamixel_sdk", "모터 제어"),
     ("serial", "시리얼"),
@@ -69,12 +59,6 @@ def check_project_files():
         else:
             print(f"  OK    {rel}  ({path.stat().st_size:,} bytes)")
 
-    env = PROJECT_ROOT / ".env"
-    if not env.exists():
-        problems.append(".env 없음")
-        print("  WARN  .env  <- .env.example 을 복사해 채우세요")
-    else:
-        print("  OK    .env")
     return problems
 
 
@@ -103,50 +87,6 @@ def check_camera():
         print(f"  OK    프레임 {frame.shape[1]}x{frame.shape[0]} 캡처")
     finally:
         capture.release()
-    return []
-
-
-def check_microphone():
-    print("\n[마이크]")
-    if shutil.which("arecord") is None:
-        print("  FAIL  arecord 가 없습니다 (alsa-utils)")
-        return ["arecord 없음"]
-
-    # arecord -l 은 로케일에 따라 "card" / "카드" 로 출력이 달라진다.
-    # 목록 파싱에 의존하지 않고 실제 캡처가 되는지로 판정한다.
-    listing = subprocess.run(
-        ["arecord", "-l"], capture_output=True, text=True,
-        env={**os.environ, "LC_ALL": "C"},
-    )
-    cards = [line.strip() for line in listing.stdout.splitlines()
-             if line.lower().startswith("card")]
-    for line in cards:
-        print(f"  장치  {line}")
-
-    working = []
-    for device in ("plughw:0,0", "plughw:0,6", "default"):
-        probe = subprocess.run(
-            ["arecord", "-q", "-D", device, "-f", "S16_LE",
-             "-r", "16000", "-c", "1", "-d", "1", "/dev/null"],
-            capture_output=True, text=True,
-            env={**os.environ, "LC_ALL": "C"},
-        )
-        if probe.returncode == 0:
-            working.append(device)
-            print(f"  OK    {device} 캡처 성공")
-        else:
-            first = (probe.stderr or "").strip().splitlines()[:1]
-            print(f"  WARN  {device} 실패: {first[0] if first else '알 수 없음'}")
-
-    if not working:
-        print("  FAIL  캡처 가능한 마이크가 없습니다")
-        return ["마이크 캡처 실패"]
-
-    vosk_model = Path.home() / "voice_models" / "vosk-model-small-ko-0.22"
-    if vosk_model.exists():
-        print(f"  OK    vosk 한국어 모델: {vosk_model}")
-    else:
-        print(f"  WARN  vosk 모델이 없습니다: {vosk_model}")
     return []
 
 
@@ -189,7 +129,6 @@ def main():
     problems += check_modules()
     problems += check_project_files()
     problems += check_camera()
-    problems += check_microphone()
     problems += check_motor_bus()
 
     print()
@@ -198,7 +137,7 @@ def main():
         for item in problems:
             print(f"  - {item}")
         return 1
-    print("카메라 · 마이크 · 모터가 모두 한 인터프리터에서 동작합니다.")
+    print("카메라 · 자세 인식 · 모터가 모두 한 인터프리터에서 동작합니다.")
     return 0
 
 

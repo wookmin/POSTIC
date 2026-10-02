@@ -1,14 +1,13 @@
 # 자세 모방 루프 설정.
 #
-# 카메라로 본 사람의 시상면 굽힘각을 지연 버퍼에 넣고, N초 뒤에 로봇이 재생한다.
+# 카메라로 본 사람의 자세를 최신값으로 판정하고, 나쁜 자세가 지속될 때만
+# 미리 정한 고정 포즈를 실행한다.
 
 echo:
-  delay_sec: 0.8          # 한 템포. 0.8초면 자연스럽게 따라오는 느낌
   control_hz: 50          # 제어 스레드 주기. 인식 프레임레이트와 무관하다
-  buffer_seconds: 6.0     # 링 버퍼 길이. delay 보다 넉넉해야 한다
 
 perception:
-  # 노트북 내장 카메라를 사용한다. 장치 번호가 다른 환경에서는
+  # 기본은 로봇에 연결된 USB 카메라를 사용한다. 장치 번호가 다른 환경에서는
   # --camera 인자로 덮어쓴다.
   camera: /dev/video0
   # 현재 레포에 포함된 lite 모델로 시작한다. full/heavy는 모델 파일을
@@ -17,7 +16,6 @@ perception:
   width: 640
   height: 480
   min_visibility: 0.5     # 이 아래면 사람을 못 본 것으로 친다
-  use_saved_reference: false  # 자세 반응 MVP는 사용자별 캘리브레이션을 쓰지 않음
   # 정면 카메라를 가정한다. 시상면 각은 world landmark 의 z(깊이)로 잡는데,
   # 단일 RGB 카메라에서 z 는 가장 노이즈가 큰 축이다. 흔들리면 카메라를
   # 측면에 두는 편이 훨씬 안정적이다.
@@ -30,6 +28,13 @@ angles:
   median_window: 7          # 7프레임이면 스파이크 방어하면서 지연 최소화
   smoothing_alpha: 0.55     # 상체용. 0.55면 반응 빠르면서 떨림 억제
   neck_smoothing_alpha: 0.35  # 2D 비율은 Z축보다 안정적 → 적당히 반응
+
+# 로봇 상단에 카메라를 장착한 주 실험에서만 사용한다. 몸통이 숙여질 때
+# neck_pitch을 반대 방향으로 움직여 카메라가 정면을 유지하도록 한다.
+# 노트북 웹캠을 사용할 때는 실행 명령에 --no-camera-gimbal을 붙인다.
+camera_gimbal:
+  enabled: true
+  joint: neck_pitch
 
 # 상체각을 4축에 나누는 비율. 합이 1.0.
 # 베이스는 위쪽 4단 전체를 이고 있어 모멘트가 가장 크므로 가장 적게 준다.
@@ -73,7 +78,7 @@ safety:
 
 # 사용자 실험 조건. 정상 자세에서는 로봇이 중립을 유지하고 움직이지 않는다.
 experiment:
-  condition: posture_trigger  # posture_trigger | voice | mirror(legacy)
+  condition: posture_trigger
   action_duration_sec: 1.0
   response_timeout_sec: 15.0
   log_dir: data/runs
@@ -98,11 +103,3 @@ intervention:
     bad_posture:
       torso_pitch_deg: 60.0
       neck_pitch_deg: 35.0
-
-# TTS는 별도 스레드에서 실행된다. 기본은 로그만 남기는 dry-run이다.
-audio:
-  tts:
-    enabled: false
-    command: [espeak-ng, -v, ko]
-    cooldown_sec: 8.0
-    timeout_sec: 10.0

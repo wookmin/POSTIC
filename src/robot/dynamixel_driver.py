@@ -14,7 +14,7 @@ import yaml
 try:
     from dynamixel_sdk import PortHandler, PacketHandler, COMM_SUCCESS
 except ImportError:
-    # 프리뷰·캘리브레이션·하드웨어 없는 테스트는 SDK 없이도 실행한다.
+    # 프리뷰·하드웨어 없는 테스트는 SDK 없이도 실행한다.
     # 실제 버스 사용 시 open_bus()에서 명확한 BusError를 낸다.
     PortHandler = None
     PacketHandler = None

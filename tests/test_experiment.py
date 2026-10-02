@@ -1,8 +1,7 @@
-"""실험 로그와 TTS 큐 테스트. 하드웨어·스피커 없이 돈다."""
+"""자세 반응 실험 로그 테스트. 하드웨어 없이 돈다."""
 
 import json
 
-from src.audio.tts import SpeechQueue
 from src.telemetry.event_log import EventLogger
 from src.telemetry.posture_observer import PostureEpisodeObserver
 from src.telemetry.response_tracker import ResponseTracker
@@ -12,12 +11,13 @@ from src.posture.classifier import classify
 
 class TestResponseTracker:
     def test_records_response_and_maintenance(self, tmp_path):
-        logger = EventLogger(tmp_path, condition="mirror", session_id="responded")
+        logger = EventLogger(tmp_path, condition="posture_trigger",
+                             session_id="responded")
         tracker = ResponseTracker(logger, response_timeout_sec=15.0)
         base = logger.started_at
 
         tracker.intervention(
-            base + 1.0, "slouch", "mirror",
+            base + 1.0, "slouch", "bad_posture",
             accepted_outputs=["motor_control_queue"],
         )
         tracker.update(base + 4.5, "good")
@@ -51,22 +51,22 @@ class TestResponseTracker:
         tracker = ResponseTracker(logger)
         tracker.intervention(
             logger.started_at + 1.0, "slouch", "mimic_slouch",
-            accepted_outputs=["motor_control_queue", "tts_queue"],
+            accepted_outputs=["motor_control_queue"],
         )
         tracker.close(logger.started_at + 2.0)
         rows = [json.loads(line) for line in logger.path.read_text().splitlines()]
         intervention = next(row for row in rows
                             if row["event"] == "intervention")
         assert intervention["delivery_status"] == "accepted_by_output_queue"
-        assert intervention["accepted_outputs"] == [
-            "motor_control_queue", "tts_queue"]
+        assert intervention["accepted_outputs"] == ["motor_control_queue"]
 
     def test_timeout_records_ignored_intervention(self, tmp_path):
-        logger = EventLogger(tmp_path, condition="voice", session_id="ignored")
+        logger = EventLogger(tmp_path, condition="posture_trigger",
+                             session_id="ignored")
         tracker = ResponseTracker(logger, response_timeout_sec=5.0)
         base = logger.started_at
 
-        tracker.intervention(base + 1.0, "forward_head", "voice")
+        tracker.intervention(base + 1.0, "forward_head", "bad_posture")
         tracker.update(base + 6.1, "forward_head")
         logger.close(base + 7.0)
 
@@ -126,19 +126,3 @@ class TestPostureEpisodeObserver:
         assert triggered["observed_bad_duration_sec"] == 3.2
         assert ended["end_reason"] == "good_classification"
         assert ended["triggered"] is True
-
-
-class TestSpeechQueue:
-    def test_disabled_queue_is_a_noop(self):
-        speaker = SpeechQueue({"enabled": False})
-        assert speaker.submit("안내") is False
-
-    def test_duplicate_text_is_suppressed_during_cooldown(self):
-        speaker = SpeechQueue({
-            "enabled": True,
-            "command": ["fake-tts"],
-            "cooldown_sec": 8.0,
-        })
-        assert speaker.submit("안내", now=10.0) is True
-        assert speaker.submit("안내", now=15.0) is False
-        assert speaker.submit("안내", now=19.0) is True

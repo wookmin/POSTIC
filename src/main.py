@@ -4,8 +4,6 @@
 정상 자세에서는 로봇을 중립에 두고 움직이지 않는다. 나쁜 자세가 정책에
 정해진 시간 이상 지속될 때만 미리 정의된 고정 포즈를 실행하고, 사용자가
 정상 자세로 돌아오면 중립으로 복귀한다.
-기존 지연 미러링 모드는 호환을 위해 남아 있지만 기본 모드는 아니다.
-
 기본은 모터를 건드리지 않는다. 실제로 움직이려면 --move 를 붙인다.
 
     ~/dynamixel-venv/bin/python -m src.main              # 프리뷰만
@@ -26,12 +24,8 @@ from src.camera.camera_stream import CameraError, CameraStream  # noqa: E402
 from src.perception.pose_estimator import (  # noqa: E402
     PoseEstimator, draw_angle_bar, draw_overlay, draw_skeleton,
 )
-from src.perception.calibration import (  # noqa: E402
-    CALIBRATION_PATH, average_reference, load_reference, save_reference,
-)
 from src.perception.posture_features import (  # noqa: E402
-    MedianFilter, PostureAngles, apply_reference, clamp_angles, extract_angles,
-    smooth,
+    MedianFilter, PostureAngles, clamp_angles, extract_angles, smooth,
 )
 from src.posture.pose_buffer import PoseBuffer  # noqa: E402
 from src.posture.classifier import classify  # noqa: E402
@@ -39,16 +33,17 @@ from src.robot.dynamixel_driver import (  # noqa: E402
     BusError, PROJECT_ROOT, describe_hardware_error, install_signal_guards,
     load_joints, open_bus, ping_all, read_hardware_error,
 )
-from src.robot.joint_mapper import JointMapper, MappingError  # noqa: E402
+from src.robot.joint_mapper import (  # noqa: E402
+    JointMapper, MappingError, TICKS_PER_DEG,
+)
 from src.robot.joint_writer import JointWriter, WriterError  # noqa: E402
 from src.behavior.behavior_manager import BehaviorManager
 from src.behavior.executor import BehaviorExecutor  # noqa: E402
 from src.safety.supervisor import (  # noqa: E402
-    STATE_IDLE, STATE_RETURNING, STATE_SAFE_STOP, STATE_TRACKING, IdlePolicy,
+    STATE_IDLE, STATE_SAFE_STOP, STATE_TRACKING, IdlePolicy,
 )
 from src.safety.gate import SafetyGate  # noqa: E402
 from src.safety.health import HealthMonitor, SafeStopRequested  # noqa: E402
-from src.audio.tts import SpeechQueue  # noqa: E402
 from src.telemetry.event_log import EventLogger  # noqa: E402
 from src.telemetry.response_tracker import ResponseTracker  # noqa: E402
 from src.telemetry.posture_observer import PostureEpisodeObserver  # noqa: E402
@@ -73,11 +68,8 @@ class ControlLoop(threading.Thread):
         self.buffer = buffer
         self.mapper = mapper
         self.condition = condition
-        self.motion_enabled = condition in {"mirror", "posture_trigger"}
-        # 조건이 음성이면 실수로 writer가 전달되어도 이 루프는 하드웨어
-        # 초기화·토크·목표 쓰기를 수행하지 않는다.
+        self.motion_enabled = True
         self.writer = writer
-        self.delay = echo["delay_sec"]
         self.period = 1.0 / echo["control_hz"]
         self.safety_gate = safety_gate or SafetyGate(mapper, config)
         self.policy = IdlePolicy(
@@ -100,6 +92,42 @@ class ControlLoop(threading.Thread):
         self._behavior_return_started_at = None
         self._behavior_release_sec = motion["idle_release_sec"]
         self._behavior_released = False
+        camera_gimbal = config.get("camera_gimbal") or {}
+        self._camera_gimbal_enabled = bool(camera_gimbal.get("enabled", False))
+        self._camera_gimbal_joint = camera_gimbal.get(
+            "joint", getattr(mapper, "neck_joint", "neck_pitch"))
+
+    def _targets_for_pose(self, pose):
+        """고정 포즈를 만들고 탑재 카메라 관절은 역회전으로 보정한다."""
+        targets = dict(self.mapper.to_targets(pose))
+        if not self._camera_gimbal_enabled:
+            return targets
+
+        joint = self._camera_gimbal_joint
+        joints = getattr(self.mapper, "joints", {})
+        spec = joints.get(joint)
+        if spec is None or joint not in targets:
+            return targets
+        reference = self._rest_targets.get(joint, self.neutral.get(joint))
+        if reference is None:
+            return targets
+
+        torso_delta_deg = 0.0
+        for name, body_spec in joints.items():
+            if name == joint or name not in targets:
+                continue
+            previous = self._rest_targets.get(name)
+            direction = float(body_spec.get("direction", 1))
+            if previous is None or direction == 0:
+                continue
+            torso_delta_deg += (
+                (targets[name] - previous) / (TICKS_PER_DEG * direction))
+
+        neck_direction = float(spec.get("direction", 1))
+        raw = reference - neck_direction * torso_delta_deg * TICKS_PER_DEG
+        targets[joint] = int(round(max(
+            spec["min_position"], min(spec["max_position"], raw))))
+        return targets
 
     def submit_behavior(self, action):
         """고정된 행동을 다음 제어 tick부터 재생한다."""
@@ -131,8 +159,7 @@ class ControlLoop(threading.Thread):
             started = self._behavior_started_at
             if action is None or started is None:
                 return None
-            # posture_trigger의 과장 포즈는 사용자가 정상 자세로 돌아올
-            # 때까지 유지한다. mirror 등 기존 행동은 기존 duration을 쓴다.
+            # 과장 포즈는 사용자가 정상 자세로 돌아올 때까지 유지한다.
             if (not getattr(action, "hold_until_good", False)
                     and now - started >= action.duration_sec):
                 self._behavior_action = None
@@ -168,7 +195,7 @@ class ControlLoop(threading.Thread):
         if behavior_pose is not None:
             if (person_visible and state == STATE_TRACKING
                     and posture_label != "good"):
-                return self.mapper.to_targets(behavior_pose), True
+                return self._targets_for_pose(behavior_pose), True
             # 사람 이탈·관측 불가·정상 자세 복귀 시 과장 포즈를 끝내고
             # 중립으로 천천히 돌아간다.
             self._cancel_behavior(now)
@@ -221,12 +248,8 @@ class ControlLoop(threading.Thread):
         while not self.stop_event.is_set():
             now = time.monotonic()
             self.heartbeat_at = now
-            if self.condition == "posture_trigger":
-                # 반응 모드는 지연된 샘플이 아니라 최신 관측값으로 사람의
-                # 존재만 확인한다. 실제 동작은 고정 포즈 이벤트만 사용한다.
-                played = self.buffer.latest()
-            else:
-                played = self.buffer.sample(now - self.delay)
+            # 반응 모드는 지연된 샘플이 아니라 최신 관측값만 사용한다.
+            played = self.buffer.latest()
             person_visible = played is not None and played.valid
             posture_label = (classify(played).label
                              if person_visible else "unknown")
@@ -235,28 +258,8 @@ class ControlLoop(threading.Thread):
                                                self.commanded, self.neutral)
             self.state = state
 
-            if self.condition == "posture_trigger":
-                desired, torque_enabled = self._posture_trigger_output(
-                    now, person_visible, state, posture_label)
-            elif self.motion_enabled:
-                if state == STATE_TRACKING:
-                    if person_visible:
-                        behavior_pose = self._behavior_pose(now)
-                        desired = self.mapper.to_targets(behavior_pose or played)
-                    else:
-                        # 사람 이탈 grace 동안에는 현재 미러링 자세를
-                        # 유지하고, RETURNING 상태부터 중립으로 복귀한다.
-                        desired = dict(self.commanded)
-                    torque_enabled = True
-                elif state == STATE_RETURNING:
-                    desired = dict(self.neutral)
-                    torque_enabled = True
-                else:
-                    desired = dict(self.neutral)
-                    torque_enabled = False
-            else:
-                desired = dict(self.neutral)
-                torque_enabled = False
+            desired, torque_enabled = self._posture_trigger_output(
+                now, person_visible, state, posture_label)
 
             # 일반 추적, 행동 재생, 중립 복귀 모두 같은 관문을 통과한다.
             limited = self.safety_gate.limit_targets(self.commanded, desired)
@@ -317,8 +320,7 @@ def check_pose_within_limits(writer, mapper):
                        + "\n손으로 컬럼을 세운 뒤 다시 실행하세요.")
 
 
-def print_status_line(now, status_mark, control, measured, played, fps,
-                      condition="mirror"):
+def print_status_line(now, status_mark, control, measured, played, fps):
     """헤드리스 모드에서 0.5초마다 상태를 한 줄로 찍는다."""
     if now - status_mark < 0.5:
         return status_mark
@@ -334,30 +336,27 @@ def print_status_line(now, status_mark, control, measured, played, fps,
             played.lateral_tilt_deg)
         if played and played.valid else "대기                 ")
     targets = control.last_targets
-    played_label = "관측" if condition == "posture_trigger" else "재생"
     print(f"[{control.state:<9}] fps {fps:4.1f} | "
-          f"측정 {measured_text} | {played_label} {played_text} | "
+          f"측정 {measured_text} | 관측 {played_text} | "
           f"목표 {targets}", flush=True)
     return now
 
 
-def draw_preview(frame, control, measured, played, echo, angles_config,
-                 landmarks, writer, fps, condition="mirror"):
+def draw_preview(frame, control, measured, played, angles_config,
+                 landmarks, writer, fps):
     """프리뷰 창에 스켈레톤과 오버레이를 그린다."""
     draw_skeleton(frame, landmarks)
-    played_label = "관측" if condition == "posture_trigger" else "재생"
     lines = [
-        f"state {control.state}   fps {fps:4.1f}   "
-        f"delay {echo['delay_sec']:.1f}s",
+        f"state {control.state}   fps {fps:4.1f}",
         ("측정  torso {:+6.1f}  neck {:+6.1f}".format(
             measured.torso_pitch_deg, measured.neck_pitch_deg)
          if measured else "측정  사람을 찾는 중"),
         ("어깨  lateral {:+6.1f}  상태 {}".format(
             measured.lateral_tilt_deg, classify(measured).label)
          if measured else "어깨  측정 대기"),
-        (f"{played_label}  torso {played.torso_pitch_deg:+6.1f}  "
+        (f"관측  torso {played.torso_pitch_deg:+6.1f}  "
          f"neck {played.neck_pitch_deg:+6.1f}"
-         if played and played.valid else f"{played_label}  대기"),
+         if played and played.valid else "관측  대기"),
         "모터  " + ("구동" if writer else "dry-run"),
     ]
     draw_overlay(frame, lines)
@@ -372,9 +371,13 @@ def run(args):
     install_signal_guards()
 
     config = load_posture_config()
+    if args.no_camera_gimbal:
+        config["camera_gimbal"] = {
+            **(config.get("camera_gimbal") or {}),
+            "enabled": False,
+        }
     perception = config["perception"]
     angles_config = config["angles"]
-    echo = config["echo"]
 
     joints = load_joints()
     if not joints:
@@ -384,22 +387,10 @@ def run(args):
     except MappingError as exc:
         sys.exit(f"관절 매핑 설정 오류: {exc}")
 
-    buffer = PoseBuffer(echo["buffer_seconds"])
+    buffer = PoseBuffer()
     median = MedianFilter(angles_config["median_window"])
-    # 자세 반응 모드는 사용자별 정상 자세를 학습하지 않는다. 저장된 기준값은
-    # 명시적으로 켠 경우에만 사용해 오래된 calibration이 몰래 적용되지 않게 한다.
-    reference = (load_reference()
-                 if perception.get("use_saved_reference", False) else None)
-
     experiment = config.get("experiment") or {}
     condition = args.condition or experiment.get("condition", "posture_trigger")
-    if args.move and condition == "voice":
-        sys.exit("voice 조건에서는 모터를 구동할 수 없습니다. "
-                 "--move 를 빼고 실행하세요.")
-
-    calibration_samples = []
-    calibration_deadline = None
-
     writer = None
     control = None
     previous = None
@@ -426,40 +417,35 @@ def run(args):
     event_logger = None
     response_tracker = None
     posture_observer = None
-    speaker = None
-    if not args.calibrate:
-        log_dir = Path(experiment.get("log_dir", "data/runs"))
-        if not log_dir.is_absolute():
-            log_dir = PROJECT_ROOT / log_dir
-        recovery_confirm_sec = float(
-            telemetry_config.get("recovery_confirm_sec", 1.0))
-        session_metadata = {
-            "participant_id": args.participant_id or None,
-            "move_enabled": bool(args.move),
-            "posture_trigger_sustain_sec": float(
-                correction_config.get("sustain_seconds", 3.0)),
-            "response_timeout_sec": float(
-                experiment.get("response_timeout_sec", 15.0)),
-            "recovery_confirm_sec": recovery_confirm_sec,
-            "camera_source": str(source),
-            "camera_width": int(perception["width"]),
-            "camera_height": int(perception["height"]),
-        }
-        event_logger = EventLogger(log_dir, condition=condition,
-                                   metadata=session_metadata)
-        response_tracker = ResponseTracker(
-            event_logger,
-            response_timeout_sec=float(
-                experiment.get("response_timeout_sec", 15.0)),
-            recovery_confirm_sec=recovery_confirm_sec,
-        )
-        posture_observer = PostureEpisodeObserver(
-            event_logger,
-            sustain_seconds=correction_config.get("sustain_seconds", 3.0),
-        )
-        audio = config.get("audio") or {}
-        speaker = SpeechQueue(audio.get("tts") or {})
-        speaker.start()
+    log_dir = Path(experiment.get("log_dir", "data/runs"))
+    if not log_dir.is_absolute():
+        log_dir = PROJECT_ROOT / log_dir
+    recovery_confirm_sec = float(
+        telemetry_config.get("recovery_confirm_sec", 1.0))
+    session_metadata = {
+        "participant_id": args.participant_id or None,
+        "move_enabled": bool(args.move),
+        "posture_trigger_sustain_sec": float(
+            correction_config.get("sustain_seconds", 3.0)),
+        "response_timeout_sec": float(
+            experiment.get("response_timeout_sec", 15.0)),
+        "recovery_confirm_sec": recovery_confirm_sec,
+        "camera_source": str(source),
+        "camera_width": int(perception["width"]),
+        "camera_height": int(perception["height"]),
+    }
+    event_logger = EventLogger(log_dir, condition=condition,
+                               metadata=session_metadata)
+    response_tracker = ResponseTracker(
+        event_logger,
+        response_timeout_sec=float(
+            experiment.get("response_timeout_sec", 15.0)),
+        recovery_confirm_sec=recovery_confirm_sec,
+    )
+    posture_observer = PostureEpisodeObserver(
+        event_logger,
+        sustain_seconds=correction_config.get("sustain_seconds", 3.0),
+    )
     stack = ExitStack()
     try:
         if args.move:
@@ -473,31 +459,20 @@ def run(args):
 
         # 교정 판단 스레드 (--no-correction 이면 비활성)
         behavior = None
-        if not args.no_correction and not args.calibrate:
+        if not args.no_correction:
             behavior = BehaviorManager(config, condition=condition)
             behavior.start()
-            if condition == "posture_trigger":
-                print(f"자세 반응 모드 활성. 조건={condition}, "
-                      "나쁜 자세가 지속될 때만 고정 모션을 실행합니다 "
-                      "(--no-correction 으로 끌 수 있음).")
-            else:
-                print(f"교정 모드 활성. 조건={condition}, Gemini 가 자세를 판단합니다 "
-                      "(--no-correction 으로 끌 수 있음).")
+            print(f"자세 반응 모드 활성. 조건={condition}, "
+                  "나쁜 자세가 지속될 때만 고정 모션을 실행합니다 "
+                  "(--no-correction 으로 끌 수 있음).")
 
         with CameraStream(source, perception["width"],
                           perception["height"]) as camera, \
                 PoseEstimator(args.model
                               or perception.get("model")) as estimator:
-            if args.calibrate:
-                print("바른 자세로 앉으세요. 3초 뒤부터 3초간 측정합니다.")
-                time.sleep(3.0)
-                print("측정 중, 움직이지 마세요...")
-                calibration_deadline = time.monotonic() + 3.0
-            else:
-                print("자세 반응 시작. 프리뷰 창에서 q 또는 Esc 로 종료합니다.")
-                if reference is None:
-                    print("사용자별 캘리브레이션 없이 실행합니다. "
-                          "카메라 위치를 고정하고 오검출을 확인하세요.")
+            print("자세 반응 시작. 프리뷰 창에서 q 또는 Esc 로 종료합니다.")
+            print("사용자별 캘리브레이션 없이 실행합니다. "
+                  "카메라 위치를 고정하고 오검출을 확인하세요.")
             if writer is None:
                 print("dry-run 입니다. 모터는 움직이지 않습니다 (--move 로 구동).")
 
@@ -528,12 +503,10 @@ def run(args):
                         perception["invert_torso"],
                         perception["invert_neck"])
 
-                raw = measured
                 if measured is not None:
                     # 순서가 중요하다. 중앙값으로 튀는 값을 먼저 버리고,
-                    # 기준값을 빼서 편향을 없앤 뒤, 자르고 부드럽게 한다.
+                    # 운용 범위 안으로 자르고 부드럽게 한다.
                     measured = median.apply(measured)
-                    measured = apply_reference(measured, reference)
                     measured = clamp_angles(measured,
                                             angles_config["max_torso_pitch_deg"],
                                             angles_config["max_neck_pitch_deg"])
@@ -589,12 +562,6 @@ def run(args):
                                         if delivered:
                                             accepted_outputs.append(
                                                 "motor_control_queue")
-                                if speaker is not None and action.speech:
-                                    speech_accepted = speaker.submit(
-                                        action.speech)
-                                    delivered = speech_accepted or delivered
-                                    if speech_accepted:
-                                        accepted_outputs.append("tts_queue")
                                 if delivered and response_tracker is not None:
                                     applied_at = time.monotonic()
                                     response_tracker.intervention(
@@ -639,25 +606,8 @@ def run(args):
                             behavior.rearm_after_skipped_event()
                         d = event.decision
                         action_name = action.behavior if action else "ignore"
-                        prefix = "자세반응" if condition == "posture_trigger" else "교정"
-                        print(f"[{prefix}] [{d.action}] {d.speech} "
+                        print(f"[자세반응] [{d.action}] {d.speech} "
                               f"(행동: {action_name}, 강도: {event.urgency})")
-
-                if calibration_deadline is not None:
-                    if raw is not None:
-                        calibration_samples.append(raw)
-                    if now >= calibration_deadline:
-                        if len(calibration_samples) < 10:
-                            sys.exit("표본이 부족합니다. 카메라 앞에 앉아서 "
-                                     "다시 시도하세요.")
-                        reference = average_reference(calibration_samples)
-                        target = save_reference(reference,
-                                                len(calibration_samples))
-                        print(f"기준값 저장: {target}")
-                        print(f"  상체 {reference.torso_pitch_deg:+.2f}도  "
-                              f"목 {reference.neck_pitch_deg:+.2f}도  "
-                              f"({len(calibration_samples)} 표본)")
-                        return 0
 
                 frames += 1
                 if now - fps_mark >= 1.0:
@@ -665,17 +615,14 @@ def run(args):
                     frames = 0
                     fps_mark = now
 
-                played = (measured if condition == "posture_trigger"
-                          else buffer.sample(now - echo["delay_sec"]))
+                played = measured
 
                 if args.no_preview:
                     status_mark = print_status_line(
-                        now, status_mark, control, measured, played, fps,
-                        condition)
+                        now, status_mark, control, measured, played, fps)
                 else:
-                    draw_preview(frame, control, measured, played, echo,
-                                 angles_config, landmarks, writer, fps,
-                                 condition)
+                    draw_preview(frame, control, measured, played,
+                                 angles_config, landmarks, writer, fps)
                     cv2.imshow("Posture Robot", frame)
                     key = cv2.waitKey(1) & 0xFF
                     if key in (ord("q"), 27):
@@ -707,8 +654,7 @@ def run(args):
             control.stop_event.set()
             control.join(timeout=2.0)
         if writer is not None and (control is None or control.motion_enabled):
-            # 모터를 먼저 정리한다. TTS 종료는 외부 프로세스가 반환될 때까지
-            # 기다릴 수 있으므로 하드웨어 정리보다 앞에 두면 안 된다.
+            # 모터를 먼저 정리한 뒤 나머지 종료 작업을 수행한다.
             try:
                 # 정리 경로도 운용 한계 검사를 건너뛰지 않는다.
                 safe_neutral = safety_gate.clamp_targets(mapper.neutral_targets())
@@ -730,8 +676,6 @@ def run(args):
             response_tracker.close(close_at)
         if posture_observer is not None:
             posture_observer.close(close_at)
-        if speaker is not None:
-            speaker.stop()
         if event_logger is not None:
             event_logger.close()
         stack.close()
@@ -742,8 +686,6 @@ def main():
     parser = argparse.ArgumentParser(description="자세 반응 로봇 루프")
     parser.add_argument("--move", action="store_true",
                         help="실제로 모터를 구동한다. 없으면 프리뷰만")
-    parser.add_argument("--calibrate", action="store_true",
-                        help="바른 자세를 3초간 재서 기준값으로 저장하고 끝낸다")
     parser.add_argument("--model",
                         help="lite / full / heavy 또는 .task 경로")
     parser.add_argument("--camera",
@@ -751,11 +693,13 @@ def main():
                              "생략하면 config/posture.yaml 의 perception.camera")
     parser.add_argument("--no-preview", action="store_true",
                         help="창을 띄우지 않는다 (헤드리스)")
+    parser.add_argument("--no-camera-gimbal", action="store_true",
+                        help="탑재 카메라 짐벌 보정을 끈다 (노트북 웹캠용)")
     parser.add_argument("--no-correction", action="store_true",
                         help="자세 반응/교정 판단을 끈다")
     parser.add_argument("--condition",
-                        choices=("posture_trigger", "voice", "mirror"),
-                        help="실험 개입 조건. 생략하면 config/posture.yaml 사용")
+                        choices=("posture_trigger",),
+                        help="실험 개입 조건 (현재 posture_trigger만 지원)")
     parser.add_argument("--participant-id",
                         help="로그용 익명 참가자 코드 (이름/이메일은 입력하지 마세요)")
     return run(parser.parse_args())

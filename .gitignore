@@ -8,6 +8,7 @@ __pycache__/
 models/**/*.task
 
 data/logs/
+data/runs/
 data/samples/
 venv/
 .venv/
