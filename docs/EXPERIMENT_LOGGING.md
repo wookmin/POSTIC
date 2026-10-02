@@ -74,7 +74,7 @@ python -m src.main --no-preview --move \
 ~~~bash
 python scripts/summarize_posture_logs.py \
   --input data/runs \
-  --output data/runs/summary.csv
+  --output-dir data/summaries
 ~~~
 
 실험 로그에는 이름, 이메일, 영상 원본을 저장하지 않는다. 참가자 ID는 P01처럼 익명 코드로 관리하고, 설정 버전과 카메라 배치 조건은 메타데이터로 남긴다.

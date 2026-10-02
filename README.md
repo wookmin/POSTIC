@@ -89,7 +89,7 @@ ID 누락, 속도 제어 모드, hardware error, 기계적 범위 이탈이 있�
 ~~~bash
 python scripts/summarize_posture_logs.py \
   --input data/runs \
-  --output data/runs/summary.csv
+  --output-dir data/summaries
 ~~~
 
 로그로 다음을 계산할 수 있다.
@@ -105,10 +105,25 @@ python scripts/summarize_posture_logs.py \
 ## 문서
 
 - 아키텍처와 현재 하드웨어: docs/ARCHITECTURE.md
+- 빠른 시작: docs/QUICKSTART.md
+- 명령어 모음: docs/COMMANDS.md
+- 문제 해결: docs/TROUBLESHOOTING.md
+- 하드웨어 연결: docs/HARDWARE_WIRING.md
+- 카메라 장착: docs/CAMERA_MOUNTING.md
+- 모터 한계와 기준 위치: docs/MOTOR_LIMITS.md
+- 설정 안내: docs/CONFIGURATION.md
+- 모듈 구조: docs/API_AND_MODULES.md
+- 상태 기계: docs/STATE_MACHINE.md
+- 안전 운용 절차: docs/SAFETY_RUNBOOK.md
 - 자세 인식과 카메라 배치: docs/PERCEPTION_AND_CAMERA.md
+- 실험 프로토콜: docs/EXPERIMENT_PROTOCOL.md
 - 로그 기반 효과 평가: docs/EXPERIMENT_LOGGING.md
+- 로그 스키마: docs/LOG_SCHEMA.md
+- 로그 분석: docs/ANALYSIS_GUIDE.md
+- 개인정보 원칙: docs/PRIVACY.md
 - 초기화와 복구의 현재 상태: docs/INITIALIZATION_AND_RECOVERY.md
 - LeRobot 참고와 적용 범위: docs/LEROBOT_INTEGRATION.md
+- 의사결정 기록: docs/decisions/
 
 ## 개발 원칙
 
